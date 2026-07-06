@@ -12,10 +12,6 @@
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Inter",
     system-ui, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-
-  --radius-card: 12px;
-  --radius-field: 10px;
-  --radius-pill: 999px;
 }
 
 :root {
@@ -25,7 +21,6 @@
      等于 --surface,在背景图调低它之前,表面与纯色主题逐像素一致。-a 系列变量才是浮层
      内容表面实际绘制用的色。 */
   --surface-alpha: 100;
-  --surface-blur: 0px;
   --surface-a: color-mix(in srgb, var(--surface) calc(var(--surface-alpha) * 1%), transparent);
   --surface-elev-a: color-mix(in srgb, var(--surface-elev) calc(var(--surface-alpha) * 1%), transparent);
   --hover-bg-a: color-mix(in srgb, var(--hover-bg) calc(var(--surface-alpha) * 1%), transparent);
@@ -109,8 +104,8 @@ html.theme-flip *::after {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-strong);
+  /* background 简写会把 clip 重置回 border-box,这里必须重新声明;border 沿用基础规则。 */
   background-clip: padding-box;
-  border: 2px solid transparent;
 }
 ::-webkit-scrollbar-track {
   background: transparent;

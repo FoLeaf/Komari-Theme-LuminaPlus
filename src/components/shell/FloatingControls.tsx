@@ -3,11 +3,19 @@ import { AlertTriangle, ChevronLeft, ChevronRight, LayoutGrid, Monitor, Palette,
 import { Link, useSearchParams } from "react-router-dom";
 import { MetricColorPicker } from "./MetricColorPicker";
 import { usePreferences } from "@/hooks/usePreferences";
-import { useViewMode } from "@/hooks/useViewMode";
+import { useViewMode, VIEW_MODE_CYCLE } from "@/hooks/useViewMode";
 import { useNodeStoreStatus } from "@/hooks/useNode";
 import { useAuth } from "@/hooks/useAuth";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
+import type { NodeViewMode } from "@/utils/themeSettings";
 import { clsx } from "clsx";
+
+// 悬浮球切换按钮展示"下一档"的图标/文案(点击后会切到的视图),而不是当前视图——
+// 与 ThemeManage 里 NODE_VIEW_MODE_OPTIONS 的图标语义保持一致。
+const VIEW_MODE_META: Record<NodeViewMode, { icon: typeof LayoutGrid; label: string }> = {
+  large: { icon: LayoutGrid, label: "大视图" },
+  compact: { icon: Rows3, label: "小视图" },
+};
 
 const APPEARANCE_OPTIONS = [
   { value: "light", icon: Sun, label: "浅色" },
@@ -41,7 +49,11 @@ function FloatingControlsInner() {
   const showSyncWarning = failureStreak >= 2;
   const hiddenTabIndex = collapsed ? -1 : undefined;
   const ToggleIcon = collapsed ? ChevronLeft : ChevronRight;
-  const ViewIcon = mode === "compact" ? LayoutGrid : Rows3;
+  const nextViewMode =
+    VIEW_MODE_CYCLE[(VIEW_MODE_CYCLE.indexOf(mode) + 1) % VIEW_MODE_CYCLE.length];
+  const ViewIcon = VIEW_MODE_META[nextViewMode].icon;
+  // 只要不在最宽松的大卡默认态,就视为"已切换"，按钮保持高亮。
+  const isReducedView = mode !== "large";
 
   return (
     <div
@@ -82,13 +94,13 @@ function FloatingControlsInner() {
                 <button
                   type="button"
                   onClick={toggleMode}
-                  aria-label="紧凑视图"
-                  aria-pressed={mode === "compact"}
-                  title={mode === "compact" ? "临时切换到大视图" : "临时切换到小视图"}
+                  aria-label="切换卡片视图"
+                  aria-pressed={isReducedView}
+                  title={`临时切换到${VIEW_MODE_META[nextViewMode].label}`}
                   tabIndex={hiddenTabIndex}
                   className={clsx(
                     "control-button grid h-9 w-9 place-items-center",
-                    mode === "compact" && "control-toggle is-active",
+                    isReducedView && "control-toggle is-active",
                   )}
                 >
                   <ViewIcon size={16} />

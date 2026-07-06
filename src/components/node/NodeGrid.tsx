@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useHomeNodeSummaries } from "@/hooks/useNode";
-import { useHomepagePingOverview } from "@/hooks/usePingMini";
+import { useHomepagePingOverview } from "@/hooks/usePingOverview";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { useViewMode } from "@/hooks/useViewMode";
 import {
@@ -32,6 +32,13 @@ import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
 import { CostSummary } from "./CostSummary";
 import { NodeCard } from "./NodeCard";
+import type { NodeViewMode } from "@/utils/themeSettings";
+
+// 每档视图各自的网格密度(gap/最小列宽)。
+const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
+  large: { className: "grid gap-4 xl:gap-5", minColumnWidth: 360 },
+  compact: { className: "grid gap-3 xl:gap-4", minColumnWidth: 340 },
+};
 
 // 把多个 uuid 拼成单个签名串作为 memo key。逗号安全:uuid 是标准 UUID
 // ([0-9a-f-]),永远不含逗号。
@@ -363,9 +370,14 @@ export function NodeGrid() {
   const costSummary = useMemo(
     () =>
       rateQuery.data
-        ? calculateCostSummary(visibleMeta, themeSettings.costIgnoredNodes, rateQuery.data.rates)
+        ? calculateCostSummary(
+            visibleMeta,
+            themeSettings.costIgnoredNodes,
+            rateQuery.data.rates,
+            themeSettings.costPremiums,
+          )
         : null,
-    [visibleMeta, themeSettings.costIgnoredNodes, rateQuery.data],
+    [visibleMeta, themeSettings.costIgnoredNodes, themeSettings.costPremiums, rateQuery.data],
   );
   // 「价格」排序键:月化价格(CNY);免费/忽略/汇率缺失的节点 null,排到默认序之后。
   const priceByUuid = useMemo(() => {
@@ -422,7 +434,11 @@ export function NodeGrid() {
     const uuids = uuidsKey ? uuidsKey.split(UUID_KEY_SEPARATOR) : [];
     return uuids.map((uuid) => (
       <div key={uuid} className="min-w-0">
-        {mode === "compact" ? <CompactNodeCard uuid={uuid} /> : <NodeCard uuid={uuid} />}
+        {mode === "compact" ? (
+          <CompactNodeCard uuid={uuid} />
+        ) : (
+          <NodeCard uuid={uuid} />
+        )}
       </div>
     ));
   }, [uuidsKey, mode]);
@@ -432,11 +448,8 @@ export function NodeGrid() {
   const showHomeSort = sortEnabled && visibleNodes.length > 1;
   // 分组标签栏和卡片网格共用,让标签栏处在同一网格中、正好占一列卡片宽——
   // 边缘和第一张卡片对齐。
-  const gridClassName = mode === "compact" ? "grid gap-3 xl:gap-4" : "grid gap-4 xl:gap-5";
-  const gridColumns =
-    mode === "compact"
-      ? "repeat(auto-fill, minmax(min(100%, 340px), 1fr))"
-      : "repeat(auto-fill, minmax(min(100%, 360px), 1fr))";
+  const { className: gridClassName, minColumnWidth } = GRID_LAYOUT[mode];
+  const gridColumns = `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))`;
 
   if (!themeSettings.isReady) {
     return (

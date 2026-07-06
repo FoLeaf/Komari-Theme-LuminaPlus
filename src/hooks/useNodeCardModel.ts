@@ -1,6 +1,7 @@
 import { useMemo } from "react";
+import { useFakePingFallback } from "@/hooks/useFakePing";
 import { useNodeMeta, useNodeMetrics, useNodeTrafficTrend } from "@/hooks/useNode";
-import { usePingMini, usePingMiniBuckets } from "@/hooks/usePingMini";
+import { useNodePingOverview, usePingBuckets } from "@/hooks/usePingOverview";
 import { formatRenewalPrice } from "@/utils/billing";
 import { getExpireTextColor } from "@/utils/expireStatus";
 import {
@@ -19,8 +20,11 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
   const meta = useNodeMeta(uuid);
   const metrics = useNodeMetrics(uuid);
   const trafficTrend = useNodeTrafficTrend(uuid);
-  const ping = usePingMini(uuid);
-  const pingBuckets = usePingMiniBuckets(ping, pingBucketCount);
+  const realPing = useNodePingOverview(uuid);
+  // 未绑定首页 Ping 的在线节点按主题开关回退到模拟延迟(见 useFakePingFallback)。
+  // 在这里替换意味着 NodeCard/CompactNodeCard 及下游的颜色、分桶全部自动生效。
+  const ping = useFakePingFallback(uuid, realPing, metrics?.online === true);
+  const pingBuckets = usePingBuckets(ping, pingBucketCount);
 
   // meta 派生字段（tag 解析、到期、续费价、OS 查询）只在 meta 变化时才变（很少），
   // 不能每秒 metrics 刷新都重算，所以单独用一个只依赖 meta 的 memo。

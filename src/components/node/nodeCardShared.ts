@@ -1,9 +1,33 @@
-// NodeCard 和 CompactNodeCard 之间共享的非视觉逻辑。两张卡刻意用不同的 class
+// NodeCard、CompactNodeCard 之间共享的非视觉逻辑。两张卡刻意用不同的 class
 // 名和布局,所以 markup 不共享——只共享逻辑和文案,否则改一处另一处会漂移。
 
-/** 卡片标签行的完整 tag 列表 tooltip(两种卡片布局共用同一文案)。 */
+import { trimFixed } from "@/utils/format";
+
+/** 卡片标签行的完整 tag 列表 tooltip(几种卡片布局共用同一文案)。 */
 export function joinTagTitle(tags: { label: string }[]) {
   return tags.map((tag) => tag.label).join(" / ");
+}
+
+/** 卡片指标百分比的展示格式:≥10% 取整,否则保留 1 位小数。紧凑卡使用这套精度规则,
+ * 避免同一节点在不同卡片上因四舍五入方式不同而数字不一致。 */
+export function formatCompactPercent(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  if (value >= 10) return `${Math.round(value)}%`;
+  return `${trimFixed(value, 1)}%`;
+}
+
+/** 卡片到期文案:"余 X天";无到期时 "余 --"。 */
+export function formatCompactExpire({ value, unit }: { value: string; unit: string }) {
+  if (value === "—") return "余 --";
+  return unit ? `余 ${value}${unit}` : value;
+}
+
+/** 卡片在线时长文案,离线或秒数非法时返回空串(调用方据此跳过整行渲染)。 */
+export function formatCompactUptime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const days = seconds / 86400;
+  const value = days >= 1 ? Math.floor(days).toString() : trimFixed(days, 2);
+  return `在线：${value}天`;
 }
 
 /**
@@ -25,7 +49,15 @@ export function nodeDetailLinkLabels(name: string, osName: string) {
   };
 }
 
-// MiniBars(延迟)和 QualityBars(丢包)共享的柱状条几何/命中检测。两者都渲染
+/**
+ * 流量/配额条"至少给点视觉提示"的下限比例,以"一段的几分之几"表达(两张卡都是 18 段)。
+ * 用量非零但极小时,以前是直接点亮/填满整段(1/18≈5.6%),把 0.01% 的用量夸张成 5.6%；
+ * 现在改成只点亮一段的这个比例(段内一道细边),既能看出"用过一点",又不会失真。
+ * 大卡(离散 span)和小卡(单元素渐变遮罩)实现方式不同,但共用这同一个比例语义。
+ */
+export const TRAFFIC_SLIVER_RATIO = 0.1;
+
+// LatencyBars(延迟)和 QualityBars(丢包)共享的柱状条几何/命中检测。两者都渲染
 // 定数量的 canvas 柱子行,所以 slot 计算和柱宽/间距必须保持一致。
 
 /** 指针 offset 落在哪个 slot(0..count-1),没有柱子时返回 null。 */

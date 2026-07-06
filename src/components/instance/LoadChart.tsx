@@ -51,7 +51,6 @@ const SERIES_LABELS: Record<string, string> = {
   connections: "TCP",
   udp: "UDP",
   process: "进程",
-  load: "负载",
 };
 const LOAD_INTERPOLATE_KEYS = [
   "cpu",
@@ -63,7 +62,6 @@ const LOAD_INTERPOLATE_KEYS = [
   "connections",
   "udp",
   "process",
-  "load",
 ];
 
 interface ChartPoint {
@@ -122,7 +120,6 @@ function pointFromNode(node: NodeMetrics): ChartPoint {
     connections: node.connectionsTcp,
     udp: node.connectionsUdp,
     process: node.process,
-    load: node.load1,
   };
 }
 
@@ -402,7 +399,6 @@ export function LoadChart({
         connections: record.connections,
         udp: record.connections_udp,
         process: record.process,
-        load: record.load,
       }))
       .filter((point) => point.time > 0)
       .sort((a, b) => a.time - b.time);

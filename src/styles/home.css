@@ -277,23 +277,34 @@
   background: color-mix(in srgb, var(--hover-bg-a) 72%, transparent);
 }
 
-.home-group-tabs button[data-active="true"] {
+/* 激活 tab 的描边+浮起阴影与费用抽屉的排序 tab(cost-summary.css 的 .cost-summary-sort-tab)
+   完全一致,组选择器只定义这一处;背景与文字色两处风格不同(费用抽屉用硬编码固定色,且暗色下
+   不另配阴影),仍各自定义。 */
+.home-group-tabs button[data-active="true"],
+.cost-summary-sort-tab[data-active="true"] {
   border-color: rgba(82, 82, 91, 0.28);
+  box-shadow:
+    0 10px 22px -18px rgba(0, 0, 0, 0.34),
+    inset 0 0 0 1px rgba(82, 82, 91, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+[data-appearance="dark"] .home-group-tabs button[data-active="true"],
+[data-appearance="dark"] .cost-summary-sort-tab[data-active="true"] {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.home-group-tabs button[data-active="true"] {
   background:
     linear-gradient(
       180deg,
       color-mix(in srgb, var(--surface-elev-a) 96%, white 4%) 0%,
       color-mix(in srgb, var(--hover-bg-a) 54%, var(--surface-a)) 100%
     );
-  box-shadow:
-    0 10px 22px -18px rgba(0, 0, 0, 0.34),
-    inset 0 0 0 1px rgba(82, 82, 91, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
   color: var(--text-primary);
 }
 
 [data-appearance="dark"] .home-group-tabs button[data-active="true"] {
-  border-color: rgba(255, 255, 255, 0.12);
   background:
     linear-gradient(
       180deg,
@@ -314,8 +325,8 @@
 }
 
 @media (max-width: 680px) {
+  /* 2 列布局已由上面 1100px 断点给出,这里只收紧间距。 */
   .home-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
 
@@ -424,51 +435,17 @@
   background: color-mix(in srgb, var(--hover-bg-a) 60%, var(--surface-a));
 }
 
+/* panel/item 骨架及 hover/激活态与实例切换器共享,见 surface.css 的弹出菜单组选择器;
+   这里只保留排序浮层的差异项。 */
 .home-sort-panel {
-  position: absolute;
-  top: calc(100% + 6px);
   right: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   min-width: 180px;
   /* 移动端不超出视口 */
   max-width: min(260px, calc(100vw - 32px));
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
 }
 
 .home-sort-item {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 10px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    color 160ms ease,
-    background 160ms ease;
-}
-
-.home-sort-item:hover {
-  color: var(--text-primary);
-  background: var(--hover-bg);
-}
-
-.home-sort-item[data-active="true"] {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--surface-elev-a) 92%, var(--hover-bg-a));
-  font-weight: 600;
 }
 
 .home-sort-item-label {

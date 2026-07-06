@@ -30,10 +30,15 @@ import {
 import { Flag } from "@/components/ui/Flag";
 import { OsLogo } from "@/components/ui/OsLogo";
 import { MetricBar } from "./MetricBar";
-import { MiniBars } from "./MiniBars";
+import { LatencyBars } from "./LatencyBars";
 import { QualityBars } from "./QualityBars";
 import { CanvasStrip, mixSrgbTowardWhite, safeCanvasColor } from "./CanvasStrip";
-import { joinTagTitle, nodeDetailLinkLabels, pingEmptyLabels } from "./nodeCardShared";
+import {
+  joinTagTitle,
+  nodeDetailLinkLabels,
+  pingEmptyLabels,
+  TRAFFIC_SLIVER_RATIO,
+} from "./nodeCardShared";
 import { IpStackBadges } from "./IpStackBadges";
 import {
   formatLatencyBucketSummary,
@@ -43,7 +48,6 @@ import {
 import { clsx } from "clsx";
 import type { NodeInfo, NodeMetrics, PingOverviewBucket, PingOverviewItem, TrafficTrendSample } from "@/types/komari";
 import type { ByteRateDisplay } from "@/utils/format";
-import type { TrafficDisplay } from "@/utils/traffic";
 
 type NodeCardNode = NodeInfo & NodeMetrics;
 type DisplayStat = { value: string; unit: string };
@@ -131,7 +135,12 @@ export const NodeCard = memo(function NodeCard({
             redrawKey={redrawKey}
           />
 
-          <NodeTrafficQuota traffic={traffic} />
+          <NodeTrafficQuota
+            litCount={trafficQuotaLitCount(traffic.fraction)}
+            remainingLabel={traffic.remainingLabel}
+            detail={traffic.detail}
+            typeLabel={traffic.typeLabel}
+          />
 
           {showConnections && (
             <div className="card-metric-section card-metric-divided server-card-meta-grid">
@@ -326,40 +335,75 @@ function NodeTrafficSection({
 
 const TRAFFIC_QUOTA_SEGMENTS = 18;
 
+// 每段的位置色是纯常量(trafficQuotaSegmentColor 只依赖位置、与主题无关),预计算一次,避免每
+// ~1s metrics tick 为每个点亮段重跑 OKLCH 插值 + 字符串构造。
+const TRAFFIC_QUOTA_SEGMENT_COLORS = Array.from(
+  { length: TRAFFIC_QUOTA_SEGMENTS },
+  (_, i) => trafficQuotaSegmentColor((i + 0.5) / TRAFFIC_QUOTA_SEGMENTS),
+);
+
+// 点亮段数:段 i 亮 ⇔ (i+0.5)/N <= fraction。抽成整数后传给 memo 化的 NodeTrafficQuota ——
+// fraction 每 tick 微动,但 litCount 只在跨越 1/N 边界时才变,于是稳态下整棵配额条子树能跳过重渲染。
+//
+// 用量非零但连半段(0.5/18≈2.8%)都点不亮时,返回哨兵值 -1,而不是直接借用 1(点亮整段)——
+// 借整段会把 0.01% 的用量夸张成 2.8%。NodeTrafficQuota 看到 -1 会把第 0 段画成"段内一道细边"
+// (TRAFFIC_SLIVER_RATIO,与小卡共用同一比例语义),既提示"用过一点"又不失真。这仍是一个离散
+// 哨兵值而非连续量,不会破坏上面说的"稳态跳过重渲染"。
+function trafficQuotaLitCount(fraction: number) {
+  let count = 0;
+  for (let i = 0; i < TRAFFIC_QUOTA_SEGMENTS; i++) {
+    if ((i + 0.5) / TRAFFIC_QUOTA_SEGMENTS <= fraction) count += 1;
+    else break;
+  }
+  if (count === 0 && fraction > 0) return -1;
+  return count;
+}
+
 // 流量阈值行:label + 剩余量(剩余量用中性色,不抢眼)、同行的 used / limit(弱化),
-// 下面是 18 个独立 segment。每个 segment 按它的绝对位置上色(绿→黄→红,见
-// trafficQuotaSegmentColor),只要 used fraction 到达就点亮,否则用中性轨道色 ——
-// 于是点亮区段呈现整条渐变,前沿就能看出离用满还有多远。
-function NodeTrafficQuota({ traffic }: { traffic: TrafficDisplay }) {
+// 下面是 18 个独立 segment。每个 segment 按它的绝对位置上色(绿→黄→红,见 trafficQuotaSegmentColor
+// / 上面预算好的色数组),只要 used fraction 到达就点亮,否则用中性轨道色 —— 于是点亮区段呈现整条
+// 渐变,前沿就能看出离用满还有多远。memo + litCount:父卡片每 tick 重渲染,但只要点亮段数与文案没变
+// 就整棵跳过。
+const NodeTrafficQuota = memo(function NodeTrafficQuota({
+  litCount,
+  remainingLabel,
+  detail,
+  typeLabel,
+}: {
+  litCount: number;
+  remainingLabel: string;
+  detail: string;
+  typeLabel: string;
+}) {
   return (
     <div
       className="card-metric-section traffic-quota"
-      title={`流量阈值 · ${traffic.typeLabel}`}
+      title={`流量阈值 · ${typeLabel}`}
     >
       <div className="traffic-quota-head">
         <span className="traffic-quota-label">
           <Database size={13} strokeWidth={2} />
           <span>剩余流量</span>
-          <strong className="traffic-quota-remain">{traffic.remainingLabel}</strong>
+          <strong className="traffic-quota-remain">{remainingLabel}</strong>
         </span>
-        <span className="traffic-quota-usage">{traffic.detail}</span>
+        <span className="traffic-quota-usage">{detail}</span>
       </div>
       <div className="traffic-quota-track" aria-hidden>
-        {Array.from({ length: TRAFFIC_QUOTA_SEGMENTS }, (_, i) => {
-          const pos = (i + 0.5) / TRAFFIC_QUOTA_SEGMENTS;
-          const lit = pos <= traffic.fraction;
-          return (
-            <span
-              key={i}
-              className="traffic-quota-segment"
-              style={{ background: lit ? trafficQuotaSegmentColor(pos) : "var(--progress-bg)" }}
-            />
-          );
+        {TRAFFIC_QUOTA_SEGMENT_COLORS.map((color, i) => {
+          // litCount === -1:哨兵值,第 0 段画成段内一道细边(细边宽度 = TRAFFIC_SLIVER_RATIO),
+          // 而不是点亮/熄灭一整段。见 trafficQuotaLitCount 顶部注释。
+          const background =
+            litCount === -1 && i === 0
+              ? `linear-gradient(to right, ${color} 0, ${color} ${TRAFFIC_SLIVER_RATIO * 100}%, var(--progress-bg) ${TRAFFIC_SLIVER_RATIO * 100}%, var(--progress-bg) 100%)`
+              : i < litCount
+                ? color
+                : "var(--progress-bg)";
+          return <span key={i} className="traffic-quota-segment" style={{ background }} />;
         })}
       </div>
     </div>
   );
-}
+});
 
 // memo:父卡片每 ~1s 指标 tick 重渲染时,这里每个 prop 都是引用稳定的 —— ping 数据
 // ~60s 才刷新一次,hover 状态只在指针交互时变,onHover 是稳定的 setState 引用 ——
@@ -420,7 +464,7 @@ const NodeHealthSection = memo(function NodeHealthSection({
         </div>
         <div className="server-health-chart-wrap">
           {hasHomepagePingBinding ? (
-            <MiniBars
+            <LatencyBars
               max={ping.max}
               buckets={pingBuckets}
               redrawKey={redrawKey}
@@ -741,7 +785,6 @@ function TrafficDotStrip({
     <CanvasStrip
       className="traffic-dot-strip"
       height={10}
-      ariaHidden
       redrawKey={redrawKey}
       draw={draw}
     />

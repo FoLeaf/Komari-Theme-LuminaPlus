@@ -1,59 +1,21 @@
-/* 紧凑节点卡片 */
+/* 紧凑节点卡片。基底(表面/描边/发丝线/悬停/离线,含 content-visibility: auto)与大卡共享,
+   定义在 node-card.css 顶部的组选择器里;这里只保留紧凑卡特有的布局与差异项。 */
 .compact-node-card {
-  position: relative;
-  /* 对屏幕外卡片跳过布局/样式/绘制。首页网格里只有约 16 张卡片在视口内,但每张屏幕外卡片仍会在
-     每约 1s 的指标刷新(样式/内联变量变动)和滚动时被布局和绘制——这是生产环境性能分析里的主要开销。
-     `auto <length>` 保留一个占位尺寸让滚动条稳定;浏览器在首次渲染后记住每张卡片的真实高度,因此
-     紧凑卡片(高度随计费/流量小块变化)滚动回来时不会跳动。该值只是首帧估算,并非沿用大卡片的 438px。 */
-  content-visibility: auto;
+  /* content-visibility: auto(来自共享基底)对屏幕外卡片跳过布局/样式/绘制。首页网格里只有约
+     16 张卡片在视口内,但每张屏幕外卡片仍会在每约 1s 的指标刷新(样式/内联变量变动)和滚动时被
+     布局和绘制——这是生产环境性能分析里的主要开销。`auto <length>` 保留一个占位尺寸让滚动条稳定;
+     浏览器在首次渲染后记住每张卡片的真实高度,因此紧凑卡片(高度随计费/流量小块变化)滚动回来时
+     不会跳动。该值只是首帧估算,并非沿用大卡片的 438px。 */
   contain-intrinsic-size: auto 300px;
   display: flex;
   min-height: 0;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: 18px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--surface-a) 94%, transparent) 0%,
-      color-mix(in srgb, var(--surface-a) 98%, black 2%) 100%
-  );
-  box-shadow: var(--shadow-card);
   padding: 14px 16px;
   color: var(--text-primary);
   transition:
     transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
     border-color 160ms ease;
-}
-
-.compact-node-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
-  opacity: 0.55;
-  pointer-events: none;
-}
-
-.compact-node-card:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--border-strong) 72%, var(--border));
-}
-
-.compact-node-card.is-offline {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--status-offline) 24%, var(--surface-a) 76%) 0%,
-      color-mix(in srgb, var(--status-offline) 16%, var(--surface-a) 84%) 100%
-    );
-  border-color: color-mix(in srgb, var(--status-offline) 58%, var(--border));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--status-offline) 28%, transparent),
-    0 14px 32px -24px color-mix(in srgb, var(--status-offline) 34%, rgba(0, 0, 0, 0.82));
 }
 
 .compact-node-header {

@@ -22,10 +22,7 @@ import { Flag } from "@/components/ui/Flag";
 import { OsLogo } from "@/components/ui/OsLogo";
 import { useNodeCardModel } from "@/hooks/useNodeCardModel";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
-import {
-  formatBytes,
-  trimFixed,
-} from "@/utils/format";
+import { formatBytes } from "@/utils/format";
 import {
   latencyHeatColor,
   lossHeatColor,
@@ -33,7 +30,15 @@ import {
   speedRateColorFromBytes,
 } from "@/utils/metricTone";
 import { formatHealthBucketTooltip } from "./pingBucketText";
-import { joinTagTitle, nodeDetailLinkLabels, pingEmptyLabels } from "./nodeCardShared";
+import {
+  formatCompactExpire,
+  formatCompactPercent,
+  formatCompactUptime,
+  joinTagTitle,
+  nodeDetailLinkLabels,
+  pingEmptyLabels,
+  TRAFFIC_SLIVER_RATIO,
+} from "./nodeCardShared";
 import { IpStackBadges } from "./IpStackBadges";
 import type {
   NodeInfo,
@@ -54,12 +59,6 @@ type CompactExpire = { value: string; unit: string };
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-function formatCompactPercent(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0%";
-  if (value >= 10) return `${Math.round(value)}%`;
-  return `${trimFixed(value, 1)}%`;
 }
 
 function CompactGauge({
@@ -195,24 +194,6 @@ function CompactInfoRow({
       </strong>
     </span>
   );
-}
-
-function formatCompactExpire({
-  value,
-  unit,
-}: {
-  value: string;
-  unit: string;
-}) {
-  if (value === "—") return "余 --";
-  return unit ? `余 ${value}${unit}` : value;
-}
-
-function formatCompactUptime(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "";
-  const days = seconds / 86400;
-  const value = days >= 1 ? Math.floor(days).toString() : trimFixed(days, 2);
-  return `在线：${value}天`;
 }
 
 function HealthBars({
@@ -574,9 +555,15 @@ function CompactTrafficBar({
   traffic: TrafficDisplay;
   uptimeLabel: string;
 }) {
+  // 用量非零但极小时,下限填充"一段的 TRAFFIC_SLIVER_RATIO"(段内一道细边),而不是整段——
+  // 否则低用量节点(如 0.01%)会被夸张成快 5.6%。fraction 为 0 时保持全灭。
+  const fillFraction =
+    traffic.fraction > 0
+      ? Math.max(clamp01(traffic.fraction), TRAFFIC_SLIVER_RATIO / 18)
+      : 0;
   const style = {
     "--compact-gauge-color": traffic.color,
-    "--compact-gauge-fill": `${clamp01(traffic.fraction) * 100}%`,
+    "--compact-gauge-fill": `${fillFraction * 100}%`,
   } as CSSProperties;
 
   return (

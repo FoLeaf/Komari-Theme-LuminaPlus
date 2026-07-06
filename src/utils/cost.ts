@@ -2,11 +2,7 @@ import type { NodeInfo } from "@/types/komari";
 import { classifyBillingCycleWord } from "@/utils/billing";
 import { fetchWithTimeout } from "@/utils/abort";
 import { resolveExpireTimestamp } from "@/utils/format";
-import {
-  buildNodeIdentitySet,
-  nodeMatchesIdentitySet,
-  normalizeNodeIdentityList,
-} from "@/utils/nodeIdentity";
+import { buildNodeIdentitySet, nodeMatchesIdentitySet, normalizeNodeIdentityList } from "@/utils/nodeIdentity";
 
 const COST_TARGET_CURRENCY = "CNY";
 export const DEFAULT_COST_RATE_API_URL = "https://api.frankfurter.dev/v2/rates?base=USD";
@@ -65,13 +61,12 @@ const CURRENCY_ALIASES: Record<string, string> = {
 
 interface CostSummary {
   nodeCount: number;
-  paidCount: number;
-  freeCount: number;
-  ignoredCount: number;
-  skippedCount: number;
   totalCny: number;
   monthlyCny: number;
   remainingCny: number;
+  // 所有节点「收购溢价」的加总:纯粹是溢价本身盈亏,不叠加到 remainingCny 上,
+  // 也不参与 totalCny/monthlyCny。
+  premiumTotalCny: number;
   details: CostSummaryDetail[];
 }
 
@@ -84,6 +79,7 @@ interface CostSummaryDetail {
   priceCny: number;
   monthlyCny: number;
   remainingCny: number;
+  premiumCny: number;
   billingCycleDays: number;
   counted: boolean;
   note: string;
@@ -91,15 +87,27 @@ interface CostSummaryDetail {
 
 interface ExchangeRateData {
   rates: Record<string, number>;
-  date: string;
   time: number;
-  stale: boolean;
 }
 
 type CostNode = NodeInfo & Record<string, unknown>;
 
 // 与「隐藏节点」共用同一套名称/UUID 解析(见 utils/nodeIdentity)。
 export const normalizeCostIgnoredNodes = normalizeNodeIdentityList;
+
+// 收购溢价:直接以节点 uuid 为 key(设置面板里是逐节点填写的数字输入框,不是自由文本,
+// 不需要「隐藏节点」那种名称/UUID 模糊匹配)。非法结构、非有限数字和 0 条目整条丢弃。
+export function normalizeCostPremiums(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const result: Record<string, number> = {};
+  for (const [uuid, raw] of Object.entries(value as Record<string, unknown>)) {
+    const key = uuid.trim();
+    const amount = Number(raw);
+    if (key && Number.isFinite(amount) && amount !== 0) result[key] = amount;
+  }
+  return result;
+}
 
 export function isCostRateApiUrlValid(value: string): boolean {
   try {
@@ -217,9 +225,8 @@ function writeRateCache(cacheKey: string, data: ExchangeRateData) {
   }
 }
 
-function parseRatePayload(payload: unknown): Pick<ExchangeRateData, "rates" | "date"> {
+function parseRatePayload(payload: unknown): Pick<ExchangeRateData, "rates"> {
   const rates: Record<string, number> = { USD: 1 };
-  let date = "";
 
   if (Array.isArray(payload)) {
     for (const item of payload) {
@@ -228,7 +235,6 @@ function parseRatePayload(payload: unknown): Pick<ExchangeRateData, "rates" | "d
       const rate = Number(record?.rate);
       if (typeof quote === "string" && Number.isFinite(rate) && rate > 0) {
         rates[quote.toUpperCase()] = rate;
-        date ||= typeof record?.date === "string" ? record.date : "";
       }
     }
   } else if (payload && typeof payload === "object") {
@@ -242,14 +248,13 @@ function parseRatePayload(payload: unknown): Pick<ExchangeRateData, "rates" | "d
         }
       }
     }
-    date = typeof record.date === "string" ? record.date : "";
   }
 
   if (!rates[COST_TARGET_CURRENCY]) {
     throw new Error("target rate missing");
   }
 
-  return { rates, date };
+  return { rates };
 }
 
 export async function getExchangeRates(rateApiUrl: string): Promise<ExchangeRateData> {
@@ -271,14 +276,13 @@ export async function getExchangeRates(rateApiUrl: string): Promise<ExchangeRate
     const data: ExchangeRateData = {
       ...parsed,
       time: Date.now(),
-      stale: false,
     };
     writeRateCache(cacheKey, data);
     return data;
   } catch (error) {
     const old = readRateCache(cacheKey, true);
     if (old) {
-      return { ...old, stale: true };
+      return old;
     }
     throw error;
   }
@@ -300,20 +304,23 @@ export function calculateCostSummary(
   nodes: NodeInfo[],
   ignoredNodes: string[],
   rates: Record<string, number>,
+  premiums: Record<string, number> = {},
 ): CostSummary {
   let totalCny = 0;
   let monthlyCny = 0;
   let remainingCny = 0;
-  let paidCount = 0;
-  let freeCount = 0;
-  let ignoredCount = 0;
-  let skippedCount = 0;
+  let premiumTotalCny = 0;
   const details: CostSummaryDetail[] = [];
   const ignored = buildNodeIdentitySet(ignoredNodes);
 
   for (const node of nodes as CostNode[]) {
     const name = node.name || node.display_name || node.remark || node.uuid;
     const cycleDays = billingCycleDays(node.billing_cycle);
+    // 收购溢价是挂在节点上的一条记录(收购时实际多花/少花的钱),以人民币直接记录,不依赖节点
+    // 价格与汇率——所以免费节点、汇率缺失的节点照样计入 premiumTotalCny 并在明细里展示,
+    // 不能因为价格校验不过就静默丢掉。它不改变 remainingCny 本身、不参与 monthly/totalCny
+    // (年化/月均支出反映的是经常性支出,溢价不是支出),只单独加总成"溢价盈亏"。
+    const premium = premiums[node.uuid] ?? 0;
     const baseDetail = {
       uuid: node.uuid,
       name: String(name || "未命名服务器"),
@@ -323,13 +330,15 @@ export function calculateCostSummary(
       priceCny: 0,
       monthlyCny: 0,
       remainingCny: 0,
+      premiumCny: premium,
       billingCycleDays: cycleDays,
     };
 
     if (nodeMatchesIdentitySet(node, ignored)) {
-      ignoredCount += 1;
+      // 忽略名单是整节点退出费用统计,溢价一并不计、不展示(premiumCny 归零)。
       details.push({
         ...baseDetail,
+        premiumCny: 0,
         counted: false,
         note: "已忽略",
       });
@@ -338,7 +347,7 @@ export function calculateCostSummary(
 
     const price = Number(node.price) || 0;
     if (price <= 0) {
-      freeCount += 1;
+      premiumTotalCny += premium;
       details.push({
         ...baseDetail,
         counted: false,
@@ -349,7 +358,7 @@ export function calculateCostSummary(
 
     const converted = convertToCny(price, node.currency, rates);
     if (converted == null || !Number.isFinite(converted)) {
-      skippedCount += 1;
+      premiumTotalCny += premium;
       details.push({
         ...baseDetail,
         counted: false,
@@ -367,7 +376,7 @@ export function calculateCostSummary(
     totalCny += monthly * 12;
     monthlyCny += monthly;
     remainingCny += remaining;
-    paidCount += 1;
+    premiumTotalCny += premium;
 
     details.push({
       ...baseDetail,
@@ -381,13 +390,10 @@ export function calculateCostSummary(
 
   return {
     nodeCount: nodes.length,
-    paidCount,
-    freeCount,
-    ignoredCount,
-    skippedCount,
     totalCny,
     monthlyCny,
     remainingCny,
+    premiumTotalCny,
     details: details.sort(
       (a, b) => a.weight - b.weight || a.name.localeCompare(b.name, "zh-CN"),
     ),

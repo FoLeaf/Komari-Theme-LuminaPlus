@@ -85,7 +85,6 @@ export function MetricBar({
         <CanvasStrip
           className="metric-track-canvas"
           height={10}
-          ariaHidden
           redrawKey={redrawKey}
           draw={draw}
         />

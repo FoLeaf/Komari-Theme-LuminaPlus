@@ -4,7 +4,6 @@ import {
   formatByteRate,
   formatByteRateLabel,
   formatExpireDays,
-  formatTrafficRate,
   formatTrafficRateLabel,
   getExpireDaysRemaining,
   parseTags,
@@ -41,14 +40,10 @@ describe("formatBytes", () => {
 });
 
 describe("formatTrafficRate", () => {
-  it("returns a zeroed bps display for non-positive / non-finite input", () => {
-    expect(formatTrafficRate(0)).toEqual({ value: "0", unit: "bps", bitsPerSec: 0 });
-    expect(formatTrafficRate(null)).toEqual({ value: "0", unit: "bps", bitsPerSec: 0 });
-    expect(formatTrafficRate(Number.POSITIVE_INFINITY)).toEqual({
-      value: "0",
-      unit: "bps",
-      bitsPerSec: 0,
-    });
+  it("returns a zeroed bps label for non-positive / non-finite input", () => {
+    expect(formatTrafficRateLabel(0)).toBe("0 bps");
+    expect(formatTrafficRateLabel(null)).toBe("0 bps");
+    expect(formatTrafficRateLabel(Number.POSITIVE_INFINITY)).toBe("0 bps");
   });
 
   it("converts bytes/sec to bit-rate units", () => {

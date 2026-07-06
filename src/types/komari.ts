@@ -116,7 +116,6 @@ export interface NodeMetrics {
   ramPct: number;
   swapUsed: number;
   swapTotal: number;
-  swapPct: number;
   diskUsed: number;
   diskTotal: number;
   diskPct: number;
@@ -141,6 +140,7 @@ export interface ThemeSettings {
   enableAdminButton?: boolean;
   showPingChart?: boolean;
   homepagePingBindings?: Record<string, string[]>;
+  fakePingForUnbound?: boolean;
   showHomeOverview?: boolean;
   showGroupTabs?: boolean;
   homeGroupOrder?: string[];
@@ -163,7 +163,9 @@ export interface ThemeSettings {
   showConnections?: boolean;
   hiddenNodes?: string[];
   costIgnoredNodes?: string[];
+  costPremiums?: Record<string, number>;
   costRateApiUrl?: string;
+  enableBackgroundImage?: boolean;
   backgroundImage?: string;
   backgroundImageMobile?: string;
   backgroundAlignment?: string;
@@ -333,27 +335,10 @@ export interface PingRecordsResponse {
   tasks: PingTask[];
 }
 
-export const PingBasicInfoSchema = z
-  .object({
-    client: z.string().default(""),
-    loss: z.number().default(0),
-    min: z.number().default(0),
-    max: z.number().default(0),
-  })
-  .passthrough();
-
-export interface PingBasicInfo {
-  client: string;
-  loss: number;
-  min: number;
-  max: number;
-}
-
 export interface PingOverviewItem {
   client: string;
   isAssigned: boolean;
   lastValue: number | null;
-  values: number[];
   samples: Array<{ time: number; value: number }>;
   max: number;
   loss: number | null;

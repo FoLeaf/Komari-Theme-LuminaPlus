@@ -4,7 +4,7 @@ import { getBarGeometry, getBarSlot } from "./nodeCardShared";
 import { latencyHeatColor } from "@/utils/metricTone";
 import type { PingOverviewBucket } from "@/types/komari";
 
-interface MiniBarsProps {
+interface LatencyBarsProps {
   /** 聚合后的延迟分桶(始终是定长窗口)。 */
   buckets: PingOverviewBucket[];
   /** 归一化到 0..1 的分母(窗口内的最大延迟)。 */
@@ -14,7 +14,7 @@ interface MiniBarsProps {
 }
 
 /** 由聚合 ping 分桶驱动、像素对齐的延迟柱状图。 */
-export function MiniBars({ buckets, max, redrawKey, onHoverIndex }: MiniBarsProps) {
+export function LatencyBars({ buckets, max, redrawKey, onHoverIndex }: LatencyBarsProps) {
   const bars = useMemo(
     () =>
       buckets.map((bucket) => ({
@@ -61,9 +61,8 @@ export function MiniBars({ buckets, max, redrawKey, onHoverIndex }: MiniBarsProp
 
   return (
     <CanvasStrip
-      className="mini-bar-row"
+      className="health-bar-row"
       height={16}
-      ariaHidden
       redrawKey={redrawKey}
       getHoverIndex={getHoverIndex}
       onHoverIndex={onHoverIndex}

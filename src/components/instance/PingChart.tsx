@@ -438,8 +438,9 @@ export function PingChart({
             <UplotReact
               // 把 cutPeak/connectNulls 纳入 key:这两个 toggle 改了数据与 y 轴 range,
               // 复用同一 uPlot 实例(resetScales=false)时会卡成空白且关掉也不恢复;
-              // 改变 key 强制重建一个干净实例,开关都能正确重绘。轮询刷新走 data prop 原地
-              // setData,不进 key——否则每次 refetch 都重建实例、丢掉进行中的拖拽缩放。
+              // 改变 key 强制重建一个干净实例,开关都能正确重绘。key 不含 data —— 详情页无轮询
+              // (useRecords 无 refetchInterval),数据只在用户点"刷新"时变;彼时 tasks/yRange 换新
+              // 引用会让 options 整体重建(而非 setData),但刷新本就是一次性主动重绘,可接受。
               key={`${uuid}-${hours}-${cutPeak ? "smooth" : "raw"}-${connectNulls ? "span" : "gap"}`}
               options={options}
               data={chart}

@@ -14,7 +14,7 @@ import {
 const DEFAULT_PING_REFRESH_INTERVAL = 60_000;
 const MIN_PING_REFRESH_INTERVAL = 10_000;
 const MAX_PING_REFRESH_INTERVAL = 300_000;
-// 首页 mini 图表特意固定为前端聚合的 24 个 bucket。首页卡片是用来快速看趋势的，
+// 首页延迟图表特意固定为前端聚合的 24 个 bucket。首页卡片是用来快速看趋势的，
 // 所以把最近一小时聚合成 24 等分窗口，而不是每根柱子对应一个后端原始 bucket。
 const MAX_VISIBLE_HOMEPAGE_PING_BUCKETS = 24;
 
@@ -22,7 +22,6 @@ const EMPTY_PING: PingOverviewItem = {
   client: "",
   isAssigned: false,
   lastValue: null,
-  values: [],
   samples: [],
   max: 1,
   loss: null,
@@ -69,15 +68,6 @@ function stringifyBindings(bindings: HomepagePingTaskBindings) {
   );
 }
 
-function equalNumberArray(a: number[], b: number[]) {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
 function equalSamples(
   a: Array<{ time: number; value: number }>,
   b: Array<{ time: number; value: number }>,
@@ -99,7 +89,6 @@ function equalPingItem(a: PingOverviewItem | undefined, b: PingOverviewItem | un
     a.lastValue === b.lastValue &&
     a.max === b.max &&
     a.loss === b.loss &&
-    equalNumberArray(a.values, b.values) &&
     equalSamples(a.samples, b.samples)
   );
 }
@@ -133,7 +122,6 @@ function buildPingOverviewItems(
       (left, right) => toTimestamp(left.time) - toTimestamp(right.time),
     );
     const latestRecord = sorted[sorted.length - 1];
-    const values: number[] = new Array(sorted.length);
     const samples: Array<{ time: number; value: number }> = [];
     let max = 1;
 
@@ -141,7 +129,6 @@ function buildPingOverviewItems(
       const record = sorted[i];
       const value = record.value;
       const time = toTimestamp(record.time);
-      values[i] = value;
       if (time > 0) {
         samples.push({ time, value });
       }
@@ -155,7 +142,6 @@ function buildPingOverviewItems(
       client,
       isAssigned: true,
       lastValue: latestRecord && latestRecord.value >= 0 ? latestRecord.value : null,
-      values,
       samples,
       max,
       loss: lossStats?.total ? (lossStats.lost / lossStats.total) * 100 : null,
@@ -261,7 +247,6 @@ async function buildOverviewMap(
       client: uuid,
       isAssigned: true,
       lastValue: null,
-      values: [],
       samples: [],
       max: 1,
       loss: null,
@@ -521,7 +506,7 @@ export function useHomepagePingOverview() {
   }, [themeSettings.homepagePingBindings, themeSettings.isReady, effectiveUuids]);
 }
 
-export function usePingMini(uuid: string): PingOverviewItem {
+export function useNodePingOverview(uuid: string): PingOverviewItem {
   const subscribe = useCallback(
     (cb: Listener) => (uuid ? subscribeToPingItem(uuid, cb) : () => undefined),
     [uuid],
@@ -533,7 +518,7 @@ export function usePingMini(uuid: string): PingOverviewItem {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function usePingMiniBuckets(
+export function usePingBuckets(
   ping: Pick<PingOverviewItem, "samples">,
   count?: number,
 ): PingOverviewBucket[] {

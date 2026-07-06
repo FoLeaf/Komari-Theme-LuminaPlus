@@ -2,6 +2,20 @@ import { useMemo } from "react";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { normalizeThemeSettings, type ResolvedThemeSettings } from "@/utils/themeSettings";
 
+type RawThemeSettings = Parameters<typeof normalizeThemeSettings>[0];
+
+let cachedRawThemeSettings: RawThemeSettings = undefined;
+let cachedResolvedThemeSettings: ResolvedThemeSettings | null = null;
+
+function getCachedResolvedThemeSettings(raw: RawThemeSettings): ResolvedThemeSettings {
+  if (cachedResolvedThemeSettings && raw === cachedRawThemeSettings) {
+    return cachedResolvedThemeSettings;
+  }
+  cachedRawThemeSettings = raw;
+  cachedResolvedThemeSettings = normalizeThemeSettings(raw);
+  return cachedResolvedThemeSettings;
+}
+
 export type ThemeSettingsState = ResolvedThemeSettings & {
   /**
    * 服务端 config 到达后为 true。config 请求失败时它也会变 true，
@@ -18,7 +32,7 @@ export function useThemeSettings(): ThemeSettingsState {
   const isReady = hasConfig || isError;
   return useMemo(
     () => ({
-      ...normalizeThemeSettings(config?.theme_settings),
+      ...getCachedResolvedThemeSettings(config?.theme_settings),
       isReady,
       isLoading: isLoading && !hasConfig,
       isError,

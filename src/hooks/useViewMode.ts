@@ -7,6 +7,9 @@ import { isNodeViewMode, type NodeViewMode } from "@/utils/themeSettings";
 const DESKTOP_OVERRIDE_KEY = "komaritheme:node-view-mode-session:desktop";
 const MOBILE_OVERRIDE_KEY = "komaritheme:node-view-mode-session:mobile";
 const MOBILE_QUERY = "(max-width: 720px)";
+// 快捷切换按钮的循环顺序:大卡 → 小卡 → 大卡……导出给 FloatingControls 算"下一档"
+// 图标/文案,避免两处各写一份顺序而漂移。
+export const VIEW_MODE_CYCLE: NodeViewMode[] = ["large", "compact"];
 
 interface ViewModeState {
   device: "desktop" | "mobile";
@@ -179,14 +182,14 @@ export function useViewMode() {
   );
 
   const toggleMode = useCallback(() => {
-    setMode(mode === "compact" ? "large" : "compact");
+    const currentIndex = VIEW_MODE_CYCLE.indexOf(mode);
+    const nextIndex = (currentIndex + 1) % VIEW_MODE_CYCLE.length;
+    setMode(VIEW_MODE_CYCLE[nextIndex]);
   }, [mode, setMode]);
 
   return {
     device: state.device,
     mode,
-    defaultMode,
-    isOverridden: state.override != null,
     setMode,
     toggleMode,
   };

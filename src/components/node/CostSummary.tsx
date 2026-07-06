@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -16,25 +17,23 @@ import {
   formatCnyMoney,
   getExchangeRates,
 } from "@/utils/cost";
+import { formatBillingCycle } from "@/utils/billing";
 import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
 import { getExpireDaysRemaining, LONG_TERM_EXPIRE_DAYS } from "@/utils/format";
 
-type CostSortField = "weight" | "price" | "remain";
+type CostSortField = "weight" | "price" | "premium";
 type CostSortDirection = "asc" | "desc";
 
 const COST_SORT_OPTIONS: Array<{ field: CostSortField; label: string }> = [
   { field: "weight", label: "权重" },
   { field: "price", label: "价格" },
-  { field: "remain", label: "剩余" },
+  { field: "premium", label: "溢价" },
 ];
 
-function formatCostCycle(days: number) {
-  if (days === -1) return "永久";
-  if (days === 30) return "月";
-  if (days === 90) return "季";
-  if (days === 180) return "半年";
-  if (days === 365 || days === 360) return "年";
-  return days > 0 ? `${days}天` : "年";
+// 统一签名格式:符号一律放在 ¥ 前面(+¥ x / -¥ x),0 也带 +,避免出现「+¥」和「¥ -」两种写法。
+function formatSignedCny(value: number) {
+  const sign = value < 0 ? "-" : "+";
+  return `${sign}${formatCnyMoney(Math.abs(value))}`;
 }
 
 function formatCostExpiry(expiredAt: string) {
@@ -50,13 +49,15 @@ function CostMetric({
   label,
   value,
   valueTone,
+  title,
 }: {
   label: string;
   value: string;
-  valueTone?: "green";
+  valueTone?: "green" | "red";
+  title?: string;
 }) {
   return (
-    <div className="cost-summary-metric" data-value-tone={valueTone}>
+    <div className="cost-summary-metric" data-value-tone={valueTone} title={title}>
       <span className="cost-summary-metric-label">{label}</span>
       <strong>{value}</strong>
     </div>
@@ -64,19 +65,18 @@ function CostMetric({
 }
 
 interface CostSummaryProps {
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-  showLauncher?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  showLauncher: boolean;
 }
 
 export function CostSummary({
   open,
   onOpenChange,
-  showLauncher = true,
-}: CostSummaryProps = {}) {
-  const [internalOpen, setInternalOpen] = useState(false);
-  const resolvedOpen = open ?? internalOpen;
-  const setOpen = onOpenChange ?? setInternalOpen;
+  showLauncher,
+}: CostSummaryProps) {
+  const resolvedOpen = open;
+  const setOpen = onOpenChange;
   const panelRef = useRef<HTMLElement | null>(null);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const [sortField, setSortField] = useState<CostSortField>("weight");
@@ -113,10 +113,11 @@ export function CostSummary({
   });
 
   const ignoredNodes = themeSettings.costIgnoredNodes;
+  const premiums = themeSettings.costPremiums;
   const rate = rateQuery.data;
   const summary = useMemo(
-    () => (rate ? calculateCostSummary(nodes, ignoredNodes, rate.rates) : null),
-    [nodes, ignoredNodes, rate],
+    () => (rate ? calculateCostSummary(nodes, ignoredNodes, rate.rates, premiums) : null),
+    [nodes, ignoredNodes, premiums, rate],
   );
   const detailRows = useMemo(() => {
     const rows = summary?.details.slice() ?? [];
@@ -126,14 +127,14 @@ export function CostSummary({
       const left =
         sortField === "price"
           ? a.priceCny
-          : sortField === "remain"
-            ? a.remainingCny
+          : sortField === "premium"
+            ? a.premiumCny
             : a.weight;
       const right =
         sortField === "price"
           ? b.priceCny
-          : sortField === "remain"
-            ? b.remainingCny
+          : sortField === "premium"
+            ? b.premiumCny
             : b.weight;
       const direction = sortDirection === "asc" ? 1 : -1;
       return (left - right) * direction || a.name.localeCompare(b.name, "zh-CN");
@@ -233,10 +234,6 @@ export function CostSummary({
         <div className="cost-summary-content">
           <div className="cost-summary-metric-grid">
             <CostMetric
-              label="服务器数量"
-              value={summary ? `${summary.nodeCount}` : "计算中"}
-            />
-            <CostMetric
               label="年化总支出"
               value={summary ? formatCnyMoney(summary.totalCny) : "计算中"}
             />
@@ -247,7 +244,21 @@ export function CostSummary({
             <CostMetric
               label="剩余价值"
               value={summary ? formatCnyMoney(summary.remainingCny) : "--"}
-              valueTone="green"
+              title="按各节点账单价格折算的剩余价值，不含收购溢价"
+            />
+            <CostMetric
+              label="溢价盈亏"
+              value={summary ? formatSignedCny(summary.premiumTotalCny) : "--"}
+              valueTone={
+                summary
+                  ? summary.premiumTotalCny < 0
+                    ? "green"
+                    : summary.premiumTotalCny > 0
+                      ? "red"
+                      : undefined
+                  : undefined
+              }
+              title="所有节点「收购溢价」的加总（正数=溢价多花钱，负数=折价少花钱），只反映溢价本身的赚亏，不叠加到剩余价值/年化/月均里"
             />
           </div>
 
@@ -289,7 +300,8 @@ export function CostSummary({
                 detailRows.map((detail) => {
                   const expiryLabel = formatCostExpiry(detail.expiredAt);
                   const priceLabel =
-                    detail.note || `${formatCnyMoney(detail.priceCny)}/${formatCostCycle(detail.billingCycleDays)}`;
+                    detail.note || `${formatCnyMoney(detail.priceCny)}/${formatBillingCycle(detail.billingCycleDays)}`;
+                  const premiumLabel = formatSignedCny(detail.premiumCny);
                   return (
                     <div
                       key={detail.uuid}
@@ -297,15 +309,38 @@ export function CostSummary({
                       data-counted={detail.counted}
                       title={detail.name}
                     >
-                      <div className="cost-summary-detail-name">
-                        <span className="cost-summary-detail-line">
+                      <div className="cost-summary-detail-head">
+                        <div className="cost-summary-detail-name">
                           <Flag region={detail.region} size={12} />
                           <span className="cost-summary-detail-title">{detail.name}</span>
-                          <span className="cost-summary-price-chip">{priceLabel}</span>
-                          <span className="cost-summary-expire-label">{expiryLabel}</span>
-                        </span>
+                        </div>
+                        <strong title="剩余价值">{formatCnyMoney(detail.remainingCny)}</strong>
                       </div>
-                      <strong>{formatCnyMoney(detail.remainingCny)}</strong>
+                      <div className="cost-summary-detail-meta">
+                        <span className="cost-summary-price-chip">{priceLabel}</span>
+                        {/* 溢价不依赖价格与汇率:免费/汇率缺失节点只要配置了溢价照样展示
+                            (与 calculateCostSummary 的计入口径一致);已忽略节点 premiumCny
+                            恒为 0,自然不显示。 */}
+                        {detail.premiumCny !== 0 && (
+                          <span
+                            className="cost-summary-premium-chip"
+                            style={
+                              {
+                                "--cost-premium-color":
+                                  detail.premiumCny < 0
+                                    ? "var(--status-success)"
+                                    : detail.premiumCny > 0
+                                      ? "var(--status-error)"
+                                      : "var(--text-tertiary)",
+                              } as CSSProperties
+                            }
+                            title="收购溢价（正数=多花钱溢价买入，负数=折价买入，0=未设置）"
+                          >
+                            {premiumLabel} 溢价
+                          </span>
+                        )}
+                        <span className="cost-summary-expire-label">{expiryLabel}</span>
+                      </div>
                     </div>
                   );
                 })

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 interface OsConfig {
   name: string;
@@ -216,7 +216,10 @@ export function resolveOsInfo(value?: string | null) {
   };
 }
 
-export function OsLogo({
+// memo:两个调用点(NodeCard/CompactNodeCard 的 Header)都在每 ~1s metrics tick 重渲染,
+// 而 props 均为原始类型且 node.os 几乎不变——不 memo 就会每卡每秒白跑 resolveOsInfo 的
+// 整套 OS_MATCHERS 正则匹配。props 稳定时这层直接跳过。
+export const OsLogo = memo(function OsLogo({
   value,
   size = 18,
 }: {
@@ -247,4 +250,4 @@ export function OsLogo({
       style={{ "--os-logo-size": `${size}px` } as React.CSSProperties}
     />
   );
-}
+});

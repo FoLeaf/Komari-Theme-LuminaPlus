@@ -83,10 +83,6 @@
               style.setProperty("--bg-size", bg.size || "cover");
               style.setProperty("--bg-position", bg.position || "center");
               style.setProperty("--surface-alpha", bg.alpha || "100");
-              if (bg.blur) {
-                style.setProperty("--surface-blur", bg.blur);
-                document.documentElement.dataset.bgGlass = "true";
-              }
               if (bg.scrim) style.setProperty("--bg-scrim", bg.scrim);
             }
           }

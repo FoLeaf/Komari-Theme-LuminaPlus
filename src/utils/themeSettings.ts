@@ -6,7 +6,12 @@ import {
   normalizeBackgroundUrl,
   normalizeSurfaceOpacity,
 } from "@/utils/background";
-import { DEFAULT_COST_RATE_API_URL, normalizeCostIgnoredNodes, normalizeCostRateApiUrl } from "@/utils/cost";
+import {
+  DEFAULT_COST_RATE_API_URL,
+  normalizeCostIgnoredNodes,
+  normalizeCostPremiums,
+  normalizeCostRateApiUrl,
+} from "@/utils/cost";
 import { normalizeNodeIdentityList } from "@/utils/nodeIdentity";
 import { normalizeHomeGroupOrder } from "@/utils/homeNodes";
 import {
@@ -32,6 +37,7 @@ export interface ResolvedThemeSettings {
   enableAdminButton: boolean;
   showPingChart: boolean;
   homepagePingBindings: HomepagePingTaskBindings;
+  fakePingForUnbound: boolean;
   showHomeOverview: boolean;
   showGroupTabs: boolean;
   homeGroupOrder: string[];
@@ -54,7 +60,9 @@ export interface ResolvedThemeSettings {
   showConnections: boolean;
   hiddenNodes: string[];
   costIgnoredNodes: string[];
+  costPremiums: Record<string, number>;
   costRateApiUrl: string;
+  enableBackgroundImage: boolean;
   backgroundImage: string;
   backgroundImageMobile: string;
   backgroundAlignment: string;
@@ -68,6 +76,7 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   enableAdminButton: true,
   showPingChart: true,
   homepagePingBindings: {},
+  fakePingForUnbound: false,
   showHomeOverview: true,
   showGroupTabs: true,
   homeGroupOrder: [],
@@ -90,7 +99,9 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   showConnections: false,
   hiddenNodes: [],
   costIgnoredNodes: [],
+  costPremiums: {},
   costRateApiUrl: DEFAULT_COST_RATE_API_URL,
+  enableBackgroundImage: true,
   backgroundImage: "",
   backgroundImageMobile: "",
   backgroundAlignment: DEFAULT_BACKGROUND_ALIGNMENT,
@@ -157,6 +168,8 @@ export function normalizeThemeSettings(
     enableAdminButton: enabledUnlessFalse(settings?.enableAdminButton),
     showPingChart: enabledUnlessFalse(settings?.showPingChart),
     homepagePingBindings: normalizeHomepagePingTaskBindings(settings?.homepagePingBindings),
+    // 默认关闭(需手动开启):给访客展示的是模拟数据,必须由站长显式决定。
+    fakePingForUnbound: settings?.fakePingForUnbound === true,
     showHomeOverview: enabledUnlessFalse(settings?.showHomeOverview),
     showGroupTabs: enabledUnlessFalse(settings?.showGroupTabs),
     homeGroupOrder: normalizeHomeGroupOrder(settings?.homeGroupOrder),
@@ -181,7 +194,10 @@ export function normalizeThemeSettings(
     showConnections: settings?.showConnections === true,
     hiddenNodes: normalizeNodeIdentityList(settings?.hiddenNodes),
     costIgnoredNodes: normalizeCostIgnoredNodes(settings?.costIgnoredNodes),
+    costPremiums: normalizeCostPremiums(settings?.costPremiums),
     costRateApiUrl: normalizeCostRateApiUrl(settings?.costRateApiUrl),
+    // 默认开:让已配置背景图的存量站点升级后行为不变;关闭 = 保留 URL 但不加载背景图。
+    enableBackgroundImage: enabledUnlessFalse(settings?.enableBackgroundImage),
     backgroundImage: normalizeBackgroundUrl(settings?.backgroundImage),
     backgroundImageMobile: normalizeBackgroundUrl(settings?.backgroundImageMobile),
     backgroundAlignment: normalizeBackgroundAlignment(settings?.backgroundAlignment),

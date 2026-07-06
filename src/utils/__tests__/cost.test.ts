@@ -4,6 +4,7 @@ import {
   formatCnyMoney,
   isCostRateApiUrlValid,
   normalizeCostIgnoredNodes,
+  normalizeCostPremiums,
   normalizeCostRateApiUrl,
   DEFAULT_COST_RATE_API_URL,
 } from "@/utils/cost";
@@ -11,6 +12,12 @@ import type { NodeInfo } from "@/types/komari";
 
 const RATES = { USD: 1, CNY: 7 };
 const RATES_X = { USD: 1, EUR: 0.9, CNY: 7 };
+
+// 分类计数器已从 CostSummary 移除(分类信息由 detail.note / detail.counted 承担),
+// 测试改为直接从 details 派生数量。
+type Summary = ReturnType<typeof calculateCostSummary>;
+const paidCount = (s: Summary) => s.details.filter((d) => d.counted).length;
+const noteCount = (s: Summary, note: string) => s.details.filter((d) => d.note === note).length;
 
 function node(overrides: Record<string, unknown>): NodeInfo {
   return {
@@ -38,7 +45,7 @@ describe("calculateCostSummary", () => {
       [],
       RATES,
     );
-    expect(summary.paidCount).toBe(1);
+    expect(paidCount(summary)).toBe(1);
     // 70 CNY/周期 × (360 天 / 30 天) ≈ 840 CNY
     expect(summary.remainingCny).toBeGreaterThan(70 * 11);
     expect(summary.remainingCny).toBeLessThan(70 * 13);
@@ -62,7 +69,7 @@ describe("calculateCostSummary", () => {
         [],
         RATES,
       );
-      expect(summary.paidCount).toBe(1);
+      expect(paidCount(summary)).toBe(1);
       // 10 USD × 7 = 70 CNY = 一个周期的价值(和 >100 年的长期节点一致)
       expect(summary.remainingCny).toBeCloseTo(70, 5);
     }
@@ -75,7 +82,7 @@ describe("calculateCostSummary", () => {
       [],
       RATES,
     );
-    expect(summary.skippedCount).toBe(0);
+    expect(noteCount(summary, "汇率缺失")).toBe(0);
     expect(summary.monthlyCny).toBeCloseTo(100, 6);
   });
 
@@ -85,8 +92,8 @@ describe("calculateCostSummary", () => {
       [],
       RATES,
     );
-    expect(summary.freeCount).toBe(1);
-    expect(summary.paidCount).toBe(0);
+    expect(noteCount(summary, "免费")).toBe(1);
+    expect(paidCount(summary)).toBe(0);
     expect(summary.totalCny).toBe(0);
   });
 
@@ -96,8 +103,8 @@ describe("calculateCostSummary", () => {
       ["ignored-box"],
       RATES,
     );
-    expect(summary.ignoredCount).toBe(1);
-    expect(summary.paidCount).toBe(0);
+    expect(noteCount(summary, "已忽略")).toBe(1);
+    expect(paidCount(summary)).toBe(0);
   });
 
   it("converts currency into CNY for the total", () => {
@@ -107,6 +114,56 @@ describe("calculateCostSummary", () => {
       RATES,
     );
     expect(summary.totalCny).toBeCloseTo(70, 5);
+  });
+});
+
+describe("calculateCostSummary — acquisition premiums", () => {
+  it("adds a paid node's premium to premiumTotalCny and its detail", () => {
+    const summary = calculateCostSummary(
+      [node({ uuid: "paid", price: 10, expired_at: inDays(10) })],
+      [],
+      RATES,
+      { paid: 50 },
+    );
+    expect(summary.premiumTotalCny).toBe(50);
+    expect(summary.details[0].premiumCny).toBe(50);
+  });
+
+  it("keeps premiums for free nodes (premium is CNY, independent of price)", () => {
+    // 防回归:溢价以前只在价格/汇率校验通过后才读取,免费节点填了溢价会被静默丢掉
+    const summary = calculateCostSummary(
+      [node({ uuid: "free", price: 0 })],
+      [],
+      RATES,
+      { free: -30 },
+    );
+    expect(noteCount(summary, "免费")).toBe(1);
+    expect(summary.premiumTotalCny).toBe(-30);
+    expect(summary.details[0].premiumCny).toBe(-30);
+  });
+
+  it("keeps premiums for rate-missing nodes (premium needs no conversion)", () => {
+    const summary = calculateCostSummary(
+      [node({ uuid: "nx", price: 10, currency: "GBP" })],
+      [],
+      RATES,
+      { nx: 20 },
+    );
+    expect(noteCount(summary, "汇率缺失")).toBe(1);
+    expect(summary.premiumTotalCny).toBe(20);
+    expect(summary.details[0].premiumCny).toBe(20);
+  });
+
+  it("drops premiums for ignored nodes (whole node exits cost stats)", () => {
+    const summary = calculateCostSummary(
+      [node({ uuid: "skip", name: "ignored-box", price: 10 })],
+      ["ignored-box"],
+      RATES,
+      { skip: 99 },
+    );
+    expect(noteCount(summary, "已忽略")).toBe(1);
+    expect(summary.premiumTotalCny).toBe(0);
+    expect(summary.details[0].premiumCny).toBe(0);
   });
 });
 
@@ -142,8 +199,8 @@ describe("calculateCostSummary — annualized total & cycle validation", () => {
       [],
       RATES,
     );
-    expect(summary.skippedCount).toBe(1);
-    expect(summary.paidCount).toBe(0);
+    expect(noteCount(summary, "汇率缺失")).toBe(1);
+    expect(paidCount(summary)).toBe(0);
     expect(summary.totalCny).toBe(0);
   });
 
@@ -178,6 +235,21 @@ describe("cost helpers", () => {
   it("normalizeCostIgnoredNodes splits, trims and dedupes", () => {
     expect(normalizeCostIgnoredNodes("a, b；b\nc")).toEqual(["a", "b", "c"]);
     expect(normalizeCostIgnoredNodes(["x", "", " y "])).toEqual(["x", "y"]);
+  });
+
+  it("normalizeCostPremiums keeps only non-zero finite numeric entries", () => {
+    expect(
+      normalizeCostPremiums({
+        paid: "12.5",
+        discount: -3,
+        zero: 0,
+        zeroString: "0",
+        bad: Number.POSITIVE_INFINITY,
+        " spaced ": 8,
+        "   ": 7,
+        "": 9,
+      }),
+    ).toEqual({ paid: 12.5, discount: -3, spaced: 8 });
   });
 
   it("normalizeCostRateApiUrl falls back to the default", () => {

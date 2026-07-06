@@ -1,18 +1,25 @@
-.server-card {
+/* 大卡(.server-card)与紧凑卡(.compact-node-card)的共享基底:表面
+   渐变/描边/圆角/阴影、顶部发丝线、悬停抬升、离线着色在两种卡片上完全相同,组选择器只定义这一处。
+   差异项(占位尺寸估算、transition、各自的 flex 布局与内边距)在各自文件里补充。 */
+.server-card,
+.compact-node-card {
   position: relative;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface-a) 94%, transparent) 0%, color-mix(in srgb, var(--surface-a) 98%, black 2%) 100%);
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
   border-radius: 18px;
   content-visibility: auto;
-  contain-intrinsic-size: 438px;
   box-shadow: var(--shadow-card);
   overflow: hidden;
+}
+.server-card {
+  contain-intrinsic-size: 438px;
   transition:
     transform 200ms cubic-bezier(0.32, 0.72, 0, 1),
     box-shadow 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-.server-card::before {
+.server-card::before,
+.compact-node-card::before {
   content: "";
   position: absolute;
   inset: 0 0 auto;
@@ -21,7 +28,8 @@
   opacity: 0.55;
   pointer-events: none;
 }
-.server-card:hover {
+.server-card:hover,
+.compact-node-card:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border-strong) 72%, var(--border));
 }
@@ -32,7 +40,8 @@
     0 18px 36px -28px rgba(0, 0, 0, 0.4);
 }
 
-.server-card.is-offline {
+.server-card.is-offline,
+.compact-node-card.is-offline {
   background:
     linear-gradient(
       180deg,
@@ -464,7 +473,7 @@
   letter-spacing: -0.03em;
 }
 
-.mini-bar-row {
+.health-bar-row {
   display: block;
   width: 100%;
   height: 16px;

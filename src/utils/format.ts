@@ -8,12 +8,11 @@ const TRAFFIC_RATE_THRESHOLDS: Array<{ unit: Exclude<TrafficRateUnit, "bps">; di
 export const LONG_TERM_EXPIRE_DAYS = 36500;
 
 type ExpireTone = "ok" | "warn" | "critical" | "long" | "none";
-export type TrafficRateUnit = "bps" | "Kbps" | "Mbps" | "Gbps" | "Tbps";
+type TrafficRateUnit = "bps" | "Kbps" | "Mbps" | "Gbps" | "Tbps";
 
-export interface TrafficRateDisplay {
+interface TrafficRateDisplay {
   value: string;
   unit: TrafficRateUnit;
-  bitsPerSec: number;
 }
 
 export function trimFixed(value: number, digits: number): string {
@@ -30,7 +29,7 @@ export function joinDisplayParts(parts: Array<string | null | undefined>) {
     .join(" · ");
 }
 
-export function formatBytes(n: number | undefined | null, decimals = 2): string {
+export function formatBytes(n: number | undefined | null): string {
   if (!n || n < 0 || !Number.isFinite(n)) return "0 B";
   let idx = 0;
   let v = n;
@@ -39,7 +38,7 @@ export function formatBytes(n: number | undefined | null, decimals = 2): string 
     idx += 1;
   }
   if (idx === 0) return `${Math.round(v)} ${UNITS[idx]}`;
-  const dec = v >= 100 ? 0 : v >= 10 ? 1 : decimals;
+  const dec = v >= 100 ? 0 : v >= 10 ? 1 : 2;
   return `${v.toFixed(dec)} ${UNITS[idx]}`;
 }
 
@@ -51,12 +50,11 @@ function formatRateValue(value: number): string {
   return trimFixed(value, 2);
 }
 
-export function formatTrafficRate(bytesPerSec: number | undefined | null): TrafficRateDisplay {
+function formatTrafficRate(bytesPerSec: number | undefined | null): TrafficRateDisplay {
   if (!bytesPerSec || !Number.isFinite(bytesPerSec) || bytesPerSec <= 0) {
     return {
       value: "0",
       unit: "bps",
-      bitsPerSec: 0,
     };
   }
 
@@ -66,7 +64,6 @@ export function formatTrafficRate(bytesPerSec: number | undefined | null): Traff
       return {
         value: formatRateValue(bitsPerSec / divisor),
         unit,
-        bitsPerSec,
       };
     }
   }
@@ -74,7 +71,6 @@ export function formatTrafficRate(bytesPerSec: number | undefined | null): Traff
   return {
     value: bitsPerSec >= 100 ? Math.round(bitsPerSec).toString() : trimFixed(bitsPerSec, 1),
     unit: "bps",
-    bitsPerSec,
   };
 }
 

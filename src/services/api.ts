@@ -8,7 +8,6 @@ import {
   LoadRecordSchema,
   PingRecordSchema,
   PingTaskSchema,
-  PingBasicInfoSchema,
   type Me,
   type NodeInfo,
   type PublicConfig,
@@ -16,7 +15,6 @@ import {
   type LoadRecordsResponse,
   type PingRecordsResponse,
   type PingTask,
-  type PingBasicInfo,
 } from "@/types/komari";
 import { fetchWithTimeout } from "@/utils/abort";
 
@@ -32,7 +30,6 @@ const RpcRecordsSchema = z
     count: z.number().default(0),
     records: z.unknown().optional(),
     tasks: z.unknown().optional(),
-    basic_info: z.unknown().optional(),
   })
   .passthrough();
 
@@ -48,14 +45,11 @@ interface RpcRecordsPayload {
   count?: number;
   records?: unknown;
   tasks?: unknown;
-  basic_info?: unknown;
 }
 
 interface PingOverviewResponse {
-  count: number;
   records: PingRecordsResponse["records"];
   tasks: PingTask[];
-  basicInfo: PingBasicInfo[];
 }
 
 export class ApiRequestError extends Error {
@@ -215,12 +209,9 @@ function normalizeRpcPingOverview(
 ): PingOverviewResponse {
   const records = parseArrayLenient(PingRecordSchema, extractRpcRecords(payload));
   const parsedTasks = z.array(PingTaskSchema).safeParse(payload.tasks);
-  const basicInfo = z.array(PingBasicInfoSchema).safeParse(payload.basic_info);
   return {
-    count: payload.count || records.length,
     records,
     tasks: parsedTasks.success ? parsedTasks.data : derivePingTasks(records),
-    basicInfo: basicInfo.success ? basicInfo.data : [],
   };
 }
 
@@ -389,18 +380,14 @@ export async function getPingOverview(
     const data = await apiGet(
       `/api/records/ping?${new URLSearchParams({ task_id: String(taskId), hours: String(hours) })}`,
       z.object({
-        count: z.number().default(0),
         records: z.array(PingRecordSchema).default([]),
         tasks: z.array(PingTaskSchema).default([]),
-        basic_info: z.array(PingBasicInfoSchema).default([]),
       }),
       { signal: options?.signal },
     );
     return {
-      count: data.count,
       records: data.records,
       tasks: data.tasks,
-      basicInfo: data.basic_info,
     } as PingOverviewResponse;
   }
 }

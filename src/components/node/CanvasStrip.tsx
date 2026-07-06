@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 interface CanvasStripProps {
   className?: string;
   height: number;
-  ariaHidden?: boolean;
   redrawKey?: string | number;
   draw: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
   getHoverIndex?: (offsetX: number, width: number) => number | null;
@@ -231,7 +230,6 @@ export function fillRoundedRect(
 export function CanvasStrip({
   className,
   height,
-  ariaHidden = false,
   redrawKey,
   draw,
   getHoverIndex,
@@ -297,7 +295,7 @@ export function CanvasStrip({
       ref={canvasRef}
       className={className}
       style={{ width: "100%", height }}
-      aria-hidden={ariaHidden}
+      aria-hidden
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
     />

@@ -98,7 +98,6 @@ function emptyMetrics(info: NodeInfo, online: boolean | null): NodeMetrics {
     ramPct: 0,
     swapUsed: 0,
     swapTotal: info.swap_total,
-    swapPct: 0,
     diskUsed: 0,
     diskTotal: info.disk_total,
     diskPct: 0,
@@ -182,7 +181,6 @@ function mergeRealtime(
     ramPct: ramTotal > 0 ? (ramUsed / ramTotal) * 100 : 0,
     swapUsed,
     swapTotal,
-    swapPct: swapTotal > 0 ? (swapUsed / swapTotal) * 100 : 0,
     diskUsed,
     diskTotal,
     diskPct: diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0,
@@ -210,7 +208,6 @@ function shallowEqualMetrics(a: NodeMetrics, b: NodeMetrics) {
     a.ramPct === b.ramPct &&
     a.swapUsed === b.swapUsed &&
     a.swapTotal === b.swapTotal &&
-    a.swapPct === b.swapPct &&
     a.diskUsed === b.diskUsed &&
     a.diskTotal === b.diskTotal &&
     a.diskPct === b.diskPct &&
@@ -402,17 +399,24 @@ function emitMappedListeners(
   }
 }
 
+// touches.meta/metrics 是集合;空集合也是 truthy,所以不能直接对它们取 Boolean。
+function hasAny(items: Iterable<string> | undefined): boolean {
+  if (!items) return false;
+  return !items[Symbol.iterator]().next().done;
+}
+
 function commit(next: State, touches: CommitTouches = {}) {
   state = next;
   // 每次 state 转换都自增。派生列表的 snapshot 用它做缓存 key,这样 getSnapshot(每次 React
   // 渲染都会调用)在上次调用后没有 commit 时能 O(1) 返回缓存引用。
   storeVersion += 1;
-  const homeTouched = Boolean(
-    touches.nodeList ||
-      touches.allNodes ||
-      touches.meta ||
-      touches.metrics,
-  );
+  // home-summary 派生自 order/meta/metrics。旧写法直接 Boolean(集合),空集合也 truthy,会在
+  // 仅 storeStatus 变化(如 refreshLatestStatus 恢复 failureStreak 时传空 metrics:[])等场景
+  // 误广播 NodeGrid/InstanceSwitcher,白触发一次 O(n) 快照重建。改为判集合非空。
+  const homeTouched =
+    Boolean(touches.nodeList || touches.allNodes) ||
+    hasAny(touches.meta) ||
+    hasAny(touches.metrics);
 
   if (touches.nodeList) emitListeners(visibleNodeListeners);
   if (touches.allNodes) emitListeners(allNodesListeners);
@@ -735,22 +739,27 @@ async function syncNodeInfo(force = false) {
     hydrated = true;
     hydratePromise = Promise.resolve();
     lastNodeInfoSyncAt = Date.now();
-    commit(
-      {
-        ...state,
-        order,
-        metaByUuid,
-        metricsByUuid,
-        trafficTrends,
-      },
-      {
-        meta: touchedMeta,
-        metrics: touchedMetrics,
-        // traffic trend 只由 refreshLatestStatus 改动;syncNodeInfo 原样带过来,这里无需通知。
-        nodeList: nodeListChanged,
-        allNodes: orderChanged || touchedMeta.size > 0,
-      },
-    );
+    // 零变化的 30s sync(order/meta/metrics 全没动)直接跳过 commit:此时新建的 order/metaByUuid/
+    // metricsByUuid/trafficTrends 与现有 state 逐元素同引用,commit 只会白自增 storeVersion(打掉
+    // 所有派生快照缓存)并广播 home-summary 订阅者,触发一次 O(n) 无效重算。稳态下几乎每个 tick 都命中。
+    if (orderChanged || touchedMeta.size > 0 || touchedMetrics.size > 0) {
+      commit(
+        {
+          ...state,
+          order,
+          metaByUuid,
+          metricsByUuid,
+          trafficTrends,
+        },
+        {
+          meta: touchedMeta,
+          metrics: touchedMetrics,
+          // traffic trend 只由 refreshLatestStatus 改动;syncNodeInfo 原样带过来,这里无需通知。
+          nodeList: nodeListChanged,
+          allNodes: orderChanged || touchedMeta.size > 0,
+        },
+      );
+    }
   } finally {
     nodeInfoInFlight = false;
   }

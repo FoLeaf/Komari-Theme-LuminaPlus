@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBackgroundCache,
-  computeBackgroundGlass,
+  computeBackgroundScrim,
   DEFAULT_BACKGROUND_ALIGNMENT,
   DEFAULT_SURFACE_OPACITY,
   normalizeBackgroundAlignment,
@@ -9,7 +9,7 @@ import {
   normalizeSurfaceOpacity,
   parseBackgroundAlignment,
   resolveBackgroundUrl,
-  SURFACE_GLASS_THRESHOLD,
+  SURFACE_SCRIM_THRESHOLD,
 } from "@/utils/background";
 
 describe("normalizeBackgroundUrl", () => {
@@ -98,32 +98,27 @@ describe("normalizeSurfaceOpacity", () => {
   });
 });
 
-describe("computeBackgroundGlass", () => {
-  it("is inactive at/above the threshold (zero cost default)", () => {
-    expect(computeBackgroundGlass(100)).toEqual({ active: false, blurPx: 0, scrimPct: 0 });
-    expect(computeBackgroundGlass(SURFACE_GLASS_THRESHOLD)).toEqual({
-      active: false,
-      blurPx: 0,
-      scrimPct: 0,
-    });
+describe("computeBackgroundScrim", () => {
+  it("is zero at/above the threshold (zero cost default)", () => {
+    expect(computeBackgroundScrim(100)).toBe(0);
+    expect(computeBackgroundScrim(SURFACE_SCRIM_THRESHOLD)).toBe(0);
   });
 
-  it("ramps blur and scrim up as opacity drops", () => {
-    const mid = computeBackgroundGlass(50);
-    expect(mid.active).toBe(true);
-    expect(mid.blurPx).toBeGreaterThan(0);
-    expect(mid.scrimPct).toBeGreaterThan(0);
+  it("ramps the scrim gently as opacity drops (no blur involved)", () => {
+    // 半透明观感只由"纯半透明表面 + 可读性遮罩"构成,刻意没有 backdrop-filter 磨砂
+    // (GPU 渲染差异会让双端观感不一致,防回归)。
+    const mid = computeBackgroundScrim(50);
+    expect(mid).toBeGreaterThan(0);
 
-    const low = computeBackgroundGlass(0);
-    expect(low.blurPx).toBeGreaterThanOrEqual(mid.blurPx);
-    expect(low.scrimPct).toBeGreaterThanOrEqual(mid.scrimPct);
-    expect(low.blurPx).toBeLessThanOrEqual(20);
-    expect(low.scrimPct).toBeLessThanOrEqual(32);
+    const low = computeBackgroundScrim(0);
+    expect(low).toBeGreaterThanOrEqual(mid);
+    expect(low).toBeLessThanOrEqual(16);
   });
 });
 
 describe("buildBackgroundCache", () => {
   const base = {
+    enableBackgroundImage: true,
     backgroundImage: "",
     backgroundImageMobile: "",
     backgroundAlignment: DEFAULT_BACKGROUND_ALIGNMENT,
@@ -132,6 +127,18 @@ describe("buildBackgroundCache", () => {
 
   it("returns null when no image is configured", () => {
     expect(buildBackgroundCache(base)).toBeNull();
+  });
+
+  it("returns null when the toggle is off, even with urls configured", () => {
+    // 开关关闭 = 与未配置等价:不写变量、不发图片请求;URL 仍保留在设置里。
+    expect(
+      buildBackgroundCache({
+        ...base,
+        enableBackgroundImage: false,
+        backgroundImage: "/a.webp",
+        surfaceOpacity: 50,
+      }),
+    ).toBeNull();
   });
 
   it("resolves both appearances and wraps urls in url()", () => {
@@ -146,19 +153,17 @@ describe("buildBackgroundCache", () => {
     expect(cache?.darkMobile).toBe('url("/dark.webp")');
   });
 
-  it("omits glass at full opacity but includes it when transparent", () => {
+  it("omits the scrim at full opacity but includes it when transparent", () => {
     const solid = buildBackgroundCache({ ...base, backgroundImage: "/a.webp" });
-    expect(solid?.blur).toBe("");
     expect(solid?.scrim).toBe("");
     expect(solid?.alpha).toBe("100");
 
-    const glassy = buildBackgroundCache({
+    const translucent = buildBackgroundCache({
       ...base,
       backgroundImage: "/a.webp",
       surfaceOpacity: 50,
     });
-    expect(glassy?.alpha).toBe("50");
-    expect(glassy?.blur).toMatch(/^\d+px$/);
-    expect(glassy?.scrim).toContain("color-mix");
+    expect(translucent?.alpha).toBe("50");
+    expect(translucent?.scrim).toContain("color-mix");
   });
 });

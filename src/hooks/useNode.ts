@@ -19,11 +19,6 @@ import {
 } from "@/services/wsStore";
 import type { NodeInfo, NodeMetrics, TrafficTrendSample } from "@/types/komari";
 
-const EMPTY_TRAFFIC_TREND_SNAPSHOT: { up: TrafficTrendSample[]; down: TrafficTrendSample[] } = {
-  up: [],
-  down: [],
-};
-
 const noopUnsubscribe = () => undefined;
 
 function useEnsured(enabled = true) {
@@ -32,16 +27,13 @@ function useEnsured(enabled = true) {
   }, [enabled]);
 }
 
-export function useNodeMeta(uuid: string, enabled = true): NodeInfo | undefined {
-  useEnsured(enabled);
+export function useNodeMeta(uuid: string): NodeInfo | undefined {
+  useEnsured();
   const subscribe = useCallback(
-    (callback: () => void) => (enabled ? subscribeToNodeMeta(uuid, callback) : noopUnsubscribe),
-    [uuid, enabled],
+    (callback: () => void) => subscribeToNodeMeta(uuid, callback),
+    [uuid],
   );
-  const getSnapshot = useCallback(
-    () => (enabled ? getNodeMetaSnapshot(uuid) : undefined),
-    [uuid, enabled],
-  );
+  const getSnapshot = useCallback(() => getNodeMetaSnapshot(uuid), [uuid]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
@@ -61,18 +53,13 @@ export function useNodeMetrics(uuid: string, enabled = true): NodeMetrics | unde
 
 export function useNodeTrafficTrend(
   uuid: string,
-  enabled = true,
 ): { up: TrafficTrendSample[]; down: TrafficTrendSample[] } {
-  useEnsured(enabled);
+  useEnsured();
   const subscribe = useCallback(
-    (callback: () => void) =>
-      enabled ? subscribeToNodeTrafficTrend(uuid, callback) : noopUnsubscribe,
-    [uuid, enabled],
+    (callback: () => void) => subscribeToNodeTrafficTrend(uuid, callback),
+    [uuid],
   );
-  const getSnapshot = useCallback(
-    () => (enabled ? getNodeTrafficTrendSnapshot(uuid) : EMPTY_TRAFFIC_TREND_SNAPSHOT),
-    [uuid, enabled],
-  );
+  const getSnapshot = useCallback(() => getNodeTrafficTrendSnapshot(uuid), [uuid]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 

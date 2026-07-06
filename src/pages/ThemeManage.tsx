@@ -29,6 +29,7 @@ import {
   ApiRequestError,
   getAdminClients,
   getAdminPingTasks,
+  getNodes,
   saveThemeSettings,
 } from "@/services/api";
 import type { AdminClient, PingTask, ThemeSettings } from "@/types/komari";
@@ -40,8 +41,12 @@ import {
   parseBackgroundAlignment,
 } from "@/utils/background";
 import {
+  calculateCostSummary,
+  formatCnyMoney,
+  getExchangeRates,
   isCostRateApiUrlValid,
   normalizeCostIgnoredNodes,
+  normalizeCostPremiums,
   normalizeCostRateApiUrl,
 } from "@/utils/cost";
 import { normalizeNodeIdentityList } from "@/utils/nodeIdentity";
@@ -57,22 +62,14 @@ import {
 import {
   DEFAULT_THEME_SETTINGS,
   normalizeThemeSettings,
-  type Appearance,
-  type NodeViewMode,
   type ResolvedThemeSettings,
 } from "@/utils/themeSettings";
 import {
   getDefaultOverviewRatingLabelText,
   OVERVIEW_RATING_STYLES,
   type OverviewRatingKind,
-  type OverviewRatingStyle,
 } from "@/utils/overviewRating";
-import {
-  HOME_SORT_FIELDS,
-  HOME_SORT_FIELD_LABELS,
-  type HomeSortDirection,
-  type HomeSortField,
-} from "@/utils/homeSort";
+import { HOME_SORT_FIELDS, HOME_SORT_FIELD_LABELS } from "@/utils/homeSort";
 
 const APPEARANCE_OPTIONS = [
   { value: "light", label: "浅色", icon: Sun },
@@ -207,12 +204,16 @@ function applyAvailableClientAssignments(
   return next;
 }
 
-function pickManagedThemeSettings(settings: ResolvedThemeSettings): ThemeSettings {
+// 本页托管设置的键清单唯一来源:草稿类型(ThemeDraft)、seed(draftFromSettings)与内容签名
+// 都从它派生。新增一项设置只需在这里加一行,再到 JSX 里接 patch()。
+// 刻意不标注返回类型:让推断给出全字段必填的具体类型,ThemeDraft 才能安全地 Omit/扩展。
+function pickManagedThemeSettings(settings: ResolvedThemeSettings) {
   return {
     defaultAppearance: settings.defaultAppearance,
     desktopNodeViewMode: settings.desktopNodeViewMode,
     mobileNodeViewMode: settings.mobileNodeViewMode,
     homepagePingBindings: settings.homepagePingBindings,
+    fakePingForUnbound: settings.fakePingForUnbound,
     showHomeOverview: settings.showHomeOverview,
     showGroupTabs: settings.showGroupTabs,
     homeGroupOrder: settings.homeGroupOrder,
@@ -235,7 +236,15 @@ function pickManagedThemeSettings(settings: ResolvedThemeSettings): ThemeSetting
     showConnections: settings.showConnections,
     hiddenNodes: settings.hiddenNodes,
     costIgnoredNodes: settings.costIgnoredNodes,
+    // 按键排序:costPremiums 的键序随编辑历史漂移(删掉再加回同一键会排到最后),而 dirty /
+    // reseed 判断都走 JSON.stringify 签名——不排序会把"内容相同、键序不同"误判成有未保存改动。
+    costPremiums: Object.fromEntries(
+      Object.keys(settings.costPremiums)
+        .sort()
+        .map((uuid) => [uuid, settings.costPremiums[uuid]]),
+    ),
     costRateApiUrl: settings.costRateApiUrl,
+    enableBackgroundImage: settings.enableBackgroundImage,
     backgroundImage: settings.backgroundImage,
     backgroundImageMobile: settings.backgroundImageMobile,
     backgroundAlignment: settings.backgroundAlignment,
@@ -247,58 +256,80 @@ function managedSettingsSignature(settings: ThemeSettings & Record<string, unkno
   return JSON.stringify(pickManagedThemeSettings(normalizeThemeSettings(settings)));
 }
 
+type ManagedThemeSettings = ReturnType<typeof pickManagedThemeSettings>;
+
+// 表单草稿:与托管设置同名同构,仅三处以「编辑态」存储——隐藏/忽略列表在表单里是多行文本
+// (提交时再归一化回数组),三个评级名称合成按 kind 索引的对象(UI 按 OVERVIEW_RATING_LABEL_FIELDS
+// 循环渲染)。其余字段直接透传,不维护第二份键清单。
+type ThemeDraft = Omit<
+  ManagedThemeSettings,
+  | "hiddenNodes"
+  | "costIgnoredNodes"
+  | "trafficRatingLabels"
+  | "bandwidthRatingLabels"
+  | "assetRatingLabels"
+> & {
+  ratingLabels: Record<OverviewRatingKind, string>;
+  hiddenNodesText: string;
+  costIgnoredText: string;
+};
+
+// 服务端设置 → 表单草稿。reseed effect 和重置按钮都经 seedDrafts 走这里。
+function draftFromSettings(settings: ResolvedThemeSettings): ThemeDraft {
+  const {
+    hiddenNodes,
+    costIgnoredNodes,
+    trafficRatingLabels,
+    bandwidthRatingLabels,
+    assetRatingLabels,
+    ...rest
+  } = pickManagedThemeSettings(settings);
+  return {
+    ...rest,
+    ratingLabels: {
+      traffic: trafficRatingLabels,
+      bandwidth: bandwidthRatingLabels,
+      asset: assetRatingLabels,
+    },
+    hiddenNodesText: hiddenNodes.join("\n"),
+    costIgnoredText: costIgnoredNodes.join("\n"),
+  };
+}
+
 export function ThemeManage() {
   const { data: config, isLoading: configLoading } = usePublicConfig();
-  const [draftAppearance, setDraftAppearance] = useState<Appearance>("system");
-  const [draftDesktopNodeViewMode, setDraftDesktopNodeViewMode] =
-    useState<NodeViewMode>("large");
-  const [draftMobileNodeViewMode, setDraftMobileNodeViewMode] =
-    useState<NodeViewMode>("compact");
-  const [draftBindings, setDraftBindings] = useState<HomepagePingTaskBindings>({});
-  const [draftShowHomeOverview, setDraftShowHomeOverview] = useState(true);
-  const [draftShowGroupTabs, setDraftShowGroupTabs] = useState(true);
-  const [draftHomeGroupOrder, setDraftHomeGroupOrder] = useState<string[]>([]);
-  const [draftEnableHomeSort, setDraftEnableHomeSort] = useState(true);
-  const [draftHomeSortField, setDraftHomeSortField] = useState<HomeSortField>("default");
-  const [draftHomeSortDirection, setDraftHomeSortDirection] = useState<HomeSortDirection>("asc");
-  const [draftShowCostSummary, setDraftShowCostSummary] = useState(true);
-  const [draftShowCostSummaryFloatingButton, setDraftShowCostSummaryFloatingButton] =
-    useState(true);
-  const [draftShowOverviewRatings, setDraftShowOverviewRatings] = useState(true);
-  const [draftOverviewRatingStyle, setDraftOverviewRatingStyle] =
-    useState<OverviewRatingStyle>("plain");
-  const [draftShowTrafficRating, setDraftShowTrafficRating] = useState(true);
-  const [draftShowBandwidthRating, setDraftShowBandwidthRating] = useState(true);
-  const [draftShowAssetRating, setDraftShowAssetRating] = useState(true);
-  const [draftRatingLabels, setDraftRatingLabels] = useState<Record<OverviewRatingKind, string>>({
-    traffic: "",
-    bandwidth: "",
-    asset: "",
-  });
-  const [draftCompactShowTrafficTotal, setDraftCompactShowTrafficTotal] = useState(true);
-  const [draftCompactShowBilling, setDraftCompactShowBilling] = useState(true);
-  const [draftCompactShowUptime, setDraftCompactShowUptime] = useState(true);
-  const [draftShowConnections, setDraftShowConnections] = useState(false);
-  const [draftHiddenNodesText, setDraftHiddenNodesText] = useState("");
-  const [draftCostIgnoredText, setDraftCostIgnoredText] = useState("");
-  const [draftCostRateApiUrl, setDraftCostRateApiUrl] = useState(
-    DEFAULT_THEME_SETTINGS.costRateApiUrl,
-  );
-  const [draftBackgroundImage, setDraftBackgroundImage] = useState("");
-  const [draftBackgroundImageMobile, setDraftBackgroundImageMobile] = useState("");
-  const [draftBackgroundAlignment, setDraftBackgroundAlignment] = useState(
-    DEFAULT_THEME_SETTINGS.backgroundAlignment,
-  );
-  const [draftSurfaceOpacity, setDraftSurfaceOpacity] = useState(
-    DEFAULT_THEME_SETTINGS.surfaceOpacity,
+  // 全部托管设置收敛为单个草稿对象。之前是 30 个平行 useState,每新增一项设置要同步维护
+  // 声明/seedDrafts/payload/依赖数组四处清单;现在键清单只在 pickManagedThemeSettings 一处。
+  const [draft, setDraft] = useState<ThemeDraft>(() =>
+    draftFromSettings(DEFAULT_THEME_SETTINGS),
   );
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
   const [taskSearch, setTaskSearch] = useState("");
   const [nodeSearch, setNodeSearch] = useState("");
+  const [premiumSearch, setPremiumSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accessRevoked, setAccessRevoked] = useState(false);
+
+  // 单字段更新收口,所有表单控件都走它。值未变时原样返回 prev,保留旧的独立 useState
+  // 在同值 set 时不触发重渲染的行为。
+  const patch = useCallback(
+    <K extends keyof ThemeDraft>(key: K, value: ThemeDraft[K]) => {
+      setDraft((prev) => (Object.is(prev[key], value) ? prev : { ...prev, [key]: value }));
+    },
+    [],
+  );
+  // 绑定关系的三个入口(勾选/全选/清空)都是基于前值的函数式更新,单独收口。
+  const patchBindings = useCallback(
+    (updater: (prev: HomepagePingTaskBindings) => HomepagePingTaskBindings) => {
+      setDraft((prev) => ({
+        ...prev,
+        homepagePingBindings: updater(prev.homepagePingBindings),
+      }));
+    },
+    [],
+  );
 
   const {
     data: pingTasks,
@@ -335,41 +366,9 @@ export function ThemeManage() {
   );
   const lastSeededSignatureRef = useRef<string | null>(null);
 
-  // 把服务端设置灌入草稿字段的唯一出口,reseed effect 和重置按钮都走它,避免两边逻辑漂移。
+  // 把服务端设置灌入草稿的唯一出口,reseed effect 和重置按钮都走它,避免两边逻辑漂移。
   const seedDrafts = useCallback((next: ResolvedThemeSettings) => {
-    setDraftAppearance(next.defaultAppearance);
-    setDraftDesktopNodeViewMode(next.desktopNodeViewMode);
-    setDraftMobileNodeViewMode(next.mobileNodeViewMode);
-    setDraftBindings(next.homepagePingBindings);
-    setDraftShowHomeOverview(next.showHomeOverview);
-    setDraftShowGroupTabs(next.showGroupTabs);
-    setDraftHomeGroupOrder(next.homeGroupOrder);
-    setDraftEnableHomeSort(next.enableHomeSort);
-    setDraftHomeSortField(next.homeSortField);
-    setDraftHomeSortDirection(next.homeSortDirection);
-    setDraftShowCostSummary(next.showCostSummary);
-    setDraftShowCostSummaryFloatingButton(next.showCostSummaryFloatingButton);
-    setDraftShowOverviewRatings(next.showOverviewRatings);
-    setDraftOverviewRatingStyle(next.overviewRatingStyle);
-    setDraftShowTrafficRating(next.showTrafficRating);
-    setDraftShowBandwidthRating(next.showBandwidthRating);
-    setDraftShowAssetRating(next.showAssetRating);
-    setDraftRatingLabels({
-      traffic: next.trafficRatingLabels,
-      bandwidth: next.bandwidthRatingLabels,
-      asset: next.assetRatingLabels,
-    });
-    setDraftCompactShowTrafficTotal(next.compactShowTrafficTotal);
-    setDraftCompactShowBilling(next.compactShowBilling);
-    setDraftCompactShowUptime(next.compactShowUptime);
-    setDraftShowConnections(next.showConnections);
-    setDraftHiddenNodesText(next.hiddenNodes.join("\n"));
-    setDraftCostIgnoredText(next.costIgnoredNodes.join("\n"));
-    setDraftCostRateApiUrl(next.costRateApiUrl);
-    setDraftBackgroundImage(next.backgroundImage);
-    setDraftBackgroundImageMobile(next.backgroundImageMobile);
-    setDraftBackgroundAlignment(next.backgroundAlignment);
-    setDraftSurfaceOpacity(next.surfaceOpacity);
+    setDraft(draftFromSettings(next));
   }, []);
 
   useEffect(() => {
@@ -393,15 +392,15 @@ export function ThemeManage() {
     [sortedClients],
   );
   const orderedDraftGroups = useMemo(
-    () => sortHomeGroupOptions(availableGroups, draftHomeGroupOrder),
-    [availableGroups, draftHomeGroupOrder],
+    () => sortHomeGroupOptions(availableGroups, draft.homeGroupOrder),
+    [availableGroups, draft.homeGroupOrder],
   );
   const moveGroup = (index: number, direction: -1 | 1) => {
     const target = index + direction;
     if (target < 0 || target >= orderedDraftGroups.length) return;
     const next = [...orderedDraftGroups];
     [next[index], next[target]] = [next[target], next[index]];
-    setDraftHomeGroupOrder(next);
+    patch("homeGroupOrder", next);
   };
 
   const filteredTasks = useMemo(() => {
@@ -432,86 +431,105 @@ export function ThemeManage() {
     });
   }, [nodeSearch, sortedClients]);
 
-  const draftHiddenNodes = useMemo(
-    () => normalizeNodeIdentityList(draftHiddenNodesText),
-    [draftHiddenNodesText],
-  );
-  const draftCostIgnoredNodes = useMemo(
-    () => normalizeCostIgnoredNodes(draftCostIgnoredText),
-    [draftCostIgnoredText],
-  );
-  const normalizedDraftCostRateApiUrl = normalizeCostRateApiUrl(draftCostRateApiUrl);
-  const draftCostRateApiUrlInvalid =
-    draftCostRateApiUrl.trim() !== "" && !isCostRateApiUrlValid(draftCostRateApiUrl.trim());
+  const filteredPremiumClients = useMemo(() => {
+    const keyword = premiumSearch.trim().toLowerCase();
+    if (!keyword) return sortedClients;
+    return sortedClients.filter((client) => {
+      const group = String(client.group || "").toLowerCase();
+      const region = String(client.region || "").toLowerCase();
+      return (
+        client.name.toLowerCase().includes(keyword) ||
+        client.uuid.toLowerCase().includes(keyword) ||
+        group.includes(keyword) ||
+        region.includes(keyword)
+      );
+    });
+  }, [premiumSearch, sortedClients]);
 
-  // 由当前草稿拼出的设置 payload,保存请求和 dirty 判断都用它。新增一项设置只需改这个对象
-  // (和 seedDrafts),不必同时改六处。
-  const draftThemeSettings = useMemo<ThemeSettings>(
-    () => ({
-      defaultAppearance: draftAppearance,
-      desktopNodeViewMode: draftDesktopNodeViewMode,
-      mobileNodeViewMode: draftMobileNodeViewMode,
-      homepagePingBindings: pruneBindings(draftBindings),
-      showHomeOverview: draftShowHomeOverview,
-      showGroupTabs: draftShowGroupTabs,
-      homeGroupOrder: normalizeHomeGroupOrder(draftHomeGroupOrder),
-      enableHomeSort: draftEnableHomeSort,
-      homeSortField: draftHomeSortField,
-      homeSortDirection: draftHomeSortDirection,
-      showCostSummary: draftShowCostSummary,
-      showCostSummaryFloatingButton: draftShowCostSummaryFloatingButton,
-      showOverviewRatings: draftShowOverviewRatings,
-      overviewRatingStyle: draftOverviewRatingStyle,
-      showTrafficRating: draftShowTrafficRating,
-      showBandwidthRating: draftShowBandwidthRating,
-      showAssetRating: draftShowAssetRating,
-      trafficRatingLabels: draftRatingLabels.traffic,
-      bandwidthRatingLabels: draftRatingLabels.bandwidth,
-      assetRatingLabels: draftRatingLabels.asset,
-      compactShowTrafficTotal: draftCompactShowTrafficTotal,
-      compactShowBilling: draftCompactShowBilling,
-      compactShowUptime: draftCompactShowUptime,
-      showConnections: draftShowConnections,
-      hiddenNodes: draftHiddenNodes,
-      costIgnoredNodes: draftCostIgnoredNodes,
-      costRateApiUrl: normalizedDraftCostRateApiUrl,
-      backgroundImage: normalizeBackgroundUrl(draftBackgroundImage),
-      backgroundImageMobile: normalizeBackgroundUrl(draftBackgroundImageMobile),
-      backgroundAlignment: normalizeBackgroundAlignment(draftBackgroundAlignment),
-      surfaceOpacity: draftSurfaceOpacity,
-    }),
-    [
-      draftAppearance,
-      draftDesktopNodeViewMode,
-      draftMobileNodeViewMode,
-      draftBindings,
-      draftShowHomeOverview,
-      draftShowGroupTabs,
-      draftHomeGroupOrder,
-      draftEnableHomeSort,
-      draftHomeSortField,
-      draftHomeSortDirection,
-      draftShowCostSummary,
-      draftShowCostSummaryFloatingButton,
-      draftShowOverviewRatings,
-      draftOverviewRatingStyle,
-      draftShowTrafficRating,
-      draftShowBandwidthRating,
-      draftShowAssetRating,
-      draftRatingLabels,
-      draftCompactShowTrafficTotal,
-      draftCompactShowBilling,
-      draftCompactShowUptime,
-      draftShowConnections,
-      draftHiddenNodes,
-      draftCostIgnoredNodes,
-      normalizedDraftCostRateApiUrl,
-      draftBackgroundImage,
-      draftBackgroundImageMobile,
-      draftBackgroundAlignment,
-      draftSurfaceOpacity,
-    ],
+  // 溢价表格里"当前剩余价值"仅供参考,用已保存的汇率源/忽略名单算(不用草稿里还没保存的
+  // 编辑),口径与资产统计面板完全一致(同一个 calculateCostSummary),但不叠加溢价本身。
+  // 刻意用一次性 getNodes 查询而不是 useAllNodeMeta():后者会启动全局节点 store 的实时
+  // 状态轮询(wsStore),设置页只需要静态 meta,不该为一列参考值挂一个常驻轮询。
+  const { data: allMeta = [] } = useQuery({
+    queryKey: ["theme-manage", "node-meta"],
+    queryFn: getNodes,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const premiumRateQuery = useQuery({
+    queryKey: ["cost-rates", sourceThemeSettings.costRateApiUrl],
+    queryFn: () => getExchangeRates(sourceThemeSettings.costRateApiUrl),
+    staleTime: 60 * 60 * 1000,
+    enabled: allMeta.length > 0,
+    retry: 1,
+  });
+  const premiumReferenceByUuid = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!premiumRateQuery.data) return map;
+    const summary = calculateCostSummary(
+      allMeta,
+      sourceThemeSettings.costIgnoredNodes,
+      premiumRateQuery.data.rates,
+    );
+    for (const detail of summary.details) {
+      map.set(detail.uuid, detail.counted ? formatCnyMoney(detail.remainingCny) : detail.note || "--");
+    }
+    return map;
+  }, [allMeta, sourceThemeSettings.costIgnoredNodes, premiumRateQuery.data]);
+
+  // 只统计非零溢价的节点数,给面板的 aside 摘要用。
+  const premiumConfiguredCount = useMemo(
+    () => Object.keys(draft.costPremiums).filter((uuid) => draft.costPremiums[uuid] !== 0).length,
+    [draft.costPremiums],
   );
+
+  const patchPremium = useCallback(
+    (uuid: string, rawValue: string) => {
+      setDraft((prev) => {
+        const next = { ...prev.costPremiums };
+        if (rawValue.trim() === "") {
+          if (!(uuid in next)) return prev;
+          delete next[uuid];
+        } else {
+          const amount = Number(rawValue);
+          if (!Number.isFinite(amount)) return prev;
+          if (Object.is(prev.costPremiums[uuid], amount)) return prev;
+          next[uuid] = amount;
+        }
+        return { ...prev, costPremiums: next };
+      });
+    },
+    [],
+  );
+
+  const draftHiddenNodes = useMemo(
+    () => normalizeNodeIdentityList(draft.hiddenNodesText),
+    [draft.hiddenNodesText],
+  );
+  const draftCostRateApiUrlInvalid =
+    draft.costRateApiUrl.trim() !== "" && !isCostRateApiUrlValid(draft.costRateApiUrl.trim());
+
+  // 由当前草稿拼出的设置 payload,保存请求和 dirty 判断都用它。草稿字段与设置同名,这里只做
+  // 「编辑态 → 存储态」的换形与归一化;文本域(hiddenNodesText/costIgnoredText)和 ratingLabels
+  // 解构出来换回存储字段,其余原样透传。
+  const draftThemeSettings = useMemo<ThemeSettings>(() => {
+    const { ratingLabels, hiddenNodesText, costIgnoredText, ...rest } = draft;
+    return {
+      ...rest,
+      homepagePingBindings: pruneBindings(rest.homepagePingBindings),
+      homeGroupOrder: normalizeHomeGroupOrder(rest.homeGroupOrder),
+      trafficRatingLabels: ratingLabels.traffic,
+      bandwidthRatingLabels: ratingLabels.bandwidth,
+      assetRatingLabels: ratingLabels.asset,
+      hiddenNodes: normalizeNodeIdentityList(hiddenNodesText),
+      costIgnoredNodes: normalizeCostIgnoredNodes(costIgnoredText),
+      costPremiums: normalizeCostPremiums(rest.costPremiums),
+      costRateApiUrl: normalizeCostRateApiUrl(rest.costRateApiUrl),
+      backgroundImage: normalizeBackgroundUrl(rest.backgroundImage),
+      backgroundImageMobile: normalizeBackgroundUrl(rest.backgroundImageMobile),
+      backgroundAlignment: normalizeBackgroundAlignment(rest.backgroundAlignment),
+    };
+  }, [draft]);
 
   // 只比较本页实际管理的设置。enableAdminButton/showPingChart 这类隐藏设置会通过
   // baseSettings 在保存时保留,但不该让表单永远显示为 dirty。
@@ -523,7 +541,7 @@ export function ThemeManage() {
   // 不会被判为 dirty,用户既无法保存也无法重置出来。所以单独跟踪原始文本,让编辑始终把表单
   // 标为 dirty(重置可用),而保存按钮再额外按合法性把关(见下文)。
   const costRateApiUrlDirty =
-    draftCostRateApiUrl.trim() !== sourceThemeSettings.costRateApiUrl;
+    draft.costRateApiUrl.trim() !== sourceThemeSettings.costRateApiUrl;
   const isDirty = draftSignature !== sourceSignature || costRateApiUrlDirty;
 
   // 用户重新编辑后清掉「已保存」提示,避免过期的成功提示和 dirty 表单并存。
@@ -532,16 +550,20 @@ export function ThemeManage() {
   }, [isDirty]);
 
   const assignedNodeCount = useMemo(
-    () => Object.values(draftBindings).reduce((total, clients) => total + clients.length, 0),
-    [draftBindings],
+    () =>
+      Object.values(draft.homepagePingBindings).reduce(
+        (total, clients) => total + clients.length,
+        0,
+      ),
+    [draft.homepagePingBindings],
   );
 
-  // 每个 client 归属哪个 task 的反查,只在 draftBindings 变化时重建。与「全选可用」reducer
+  // 每个 client 归属哪个 task 的反查,只在绑定草稿变化时重建。与「全选可用」reducer
   // 共用 invertBindings() 避免推导漂移,并把可选节点过滤保持在 O(tasks × clients),
   // 而不是每个 client 都重扫一遍 bindings。
   const assignedTaskByClientUuid = useMemo(
-    () => invertBindings(draftBindings),
-    [draftBindings],
+    () => invertBindings(draft.homepagePingBindings),
+    [draft.homepagePingBindings],
   );
 
   const handleSave = async () => {
@@ -609,17 +631,22 @@ export function ThemeManage() {
   const noTasksYet = !tasksLoading && !clientsLoading && sortedTasks.length === 0;
   const noFilteredTaskMatch = !tasksLoading && !clientsLoading && !noTasksYet && filteredTasks.length === 0;
   const setRatingLabelDraft = (kind: OverviewRatingKind, value: string) => {
-    setDraftRatingLabels((prev) => ({ ...prev, [kind]: value }));
+    setDraft((prev) => ({
+      ...prev,
+      ratingLabels: { ...prev.ratingLabels, [kind]: value },
+    }));
   };
-  const draftBgAlignment = parseBackgroundAlignment(draftBackgroundAlignment);
+  const draftBgAlignment = parseBackgroundAlignment(draft.backgroundAlignment);
   const setBgSize = (size: BackgroundSize) =>
-    setDraftBackgroundAlignment(`${size},${draftBgAlignment.position}`);
+    patch("backgroundAlignment", `${size},${draftBgAlignment.position}`);
   const setBgPosition = (position: BackgroundPosition) =>
-    setDraftBackgroundAlignment(`${draftBgAlignment.size},${position}`);
-  const hasBackgroundImage = Boolean(
-    normalizeBackgroundUrl(draftBackgroundImage) ||
-      normalizeBackgroundUrl(draftBackgroundImageMobile),
-  );
+    patch("backgroundAlignment", `${draftBgAlignment.size},${position}`);
+  const hasBackgroundImage =
+    draft.enableBackgroundImage &&
+    Boolean(
+      normalizeBackgroundUrl(draft.backgroundImage) ||
+        normalizeBackgroundUrl(draft.backgroundImageMobile),
+    );
 
   return (
     <div className="flex flex-col gap-5 py-2">
@@ -699,9 +726,9 @@ export function ThemeManage() {
             <button
               key={value}
               type="button"
-              data-active={draftAppearance === value ? "true" : "false"}
-              aria-pressed={draftAppearance === value}
-              onClick={() => setDraftAppearance(value)}
+              data-active={draft.defaultAppearance === value ? "true" : "false"}
+              aria-pressed={draft.defaultAppearance === value}
+              onClick={() => patch("defaultAppearance", value)}
               className="inline-flex items-center justify-center gap-2"
             >
               <Icon size={14} />
@@ -731,9 +758,9 @@ export function ThemeManage() {
                 <button
                   key={value}
                   type="button"
-                  data-active={draftDesktopNodeViewMode === value ? "true" : "false"}
-                  aria-pressed={draftDesktopNodeViewMode === value}
-                  onClick={() => setDraftDesktopNodeViewMode(value)}
+                  data-active={draft.desktopNodeViewMode === value ? "true" : "false"}
+                  aria-pressed={draft.desktopNodeViewMode === value}
+                  onClick={() => patch("desktopNodeViewMode", value)}
                   className="inline-flex items-center justify-center gap-2"
                 >
                   <Icon size={14} />
@@ -756,9 +783,9 @@ export function ThemeManage() {
                 <button
                   key={value}
                   type="button"
-                  data-active={draftMobileNodeViewMode === value ? "true" : "false"}
-                  aria-pressed={draftMobileNodeViewMode === value}
-                  onClick={() => setDraftMobileNodeViewMode(value)}
+                  data-active={draft.mobileNodeViewMode === value ? "true" : "false"}
+                  aria-pressed={draft.mobileNodeViewMode === value}
+                  onClick={() => patch("mobileNodeViewMode", value)}
                   className="inline-flex items-center justify-center gap-2"
                 >
                   <Icon size={14} />
@@ -772,18 +799,34 @@ export function ThemeManage() {
 
       <InstancePanel
         title="背景与透明度"
-        description="为站点设置自定义背景图，并调节卡片不透明度。背景图可分别为浅色 / 深色与桌面 / 移动端设置；卡片不透明度调低后会自动加上磨砂玻璃与可读性遮罩。"
+        description="为站点设置自定义背景图，并调节卡片不透明度。背景图可分别为浅色 / 深色与桌面 / 移动端设置；卡片不透明度调低后会自动叠加可读性遮罩。"
         aside={<Wallpaper size={16} />}
       >
         <div className="flex flex-col gap-4">
+          <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                启用背景图
+              </span>
+              <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
+                关闭后不加载任何背景图（下方 URL 配置会保留），站点回到纯色主题；再次开启即恢复。
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.enableBackgroundImage}
+              onChange={(event) => patch("enableBackgroundImage", event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
+            />
+          </label>
           <div className="grid gap-4 md:grid-cols-2">
             <label className="flex min-w-0 flex-col gap-2">
               <span className="text-[12px] font-medium text-[var(--text-secondary)]">
                 桌面端背景图
               </span>
               <input
-                value={draftBackgroundImage}
-                onChange={(event) => setDraftBackgroundImage(event.target.value)}
+                value={draft.backgroundImage}
+                onChange={(event) => patch("backgroundImage", event.target.value)}
                 placeholder="https://example.com/bg.webp"
                 className="surface-inset w-full px-3 py-2 text-[13px] outline-none"
               />
@@ -796,8 +839,8 @@ export function ThemeManage() {
                 移动端背景图
               </span>
               <input
-                value={draftBackgroundImageMobile}
-                onChange={(event) => setDraftBackgroundImageMobile(event.target.value)}
+                value={draft.backgroundImageMobile}
+                onChange={(event) => patch("backgroundImageMobile", event.target.value)}
                 placeholder="留空则沿用桌面端背景图"
                 className="surface-inset w-full px-3 py-2 text-[13px] outline-none"
               />
@@ -854,13 +897,13 @@ export function ThemeManage() {
                   max={100}
                   step={1}
                   inputMode="numeric"
-                  value={draftSurfaceOpacity}
+                  value={draft.surfaceOpacity}
                   onChange={(event) => {
                     // Number("") === 0,没有这行的话清空输入框(想重新输入)会把值跳成 0。
                     if (event.target.value.trim() === "") return;
                     const next = Number(event.target.value);
                     if (!Number.isFinite(next)) return;
-                    setDraftSurfaceOpacity(Math.min(100, Math.max(0, Math.round(next))));
+                    patch("surfaceOpacity", Math.min(100, Math.max(0, Math.round(next))));
                   }}
                   aria-label="卡片不透明度百分比"
                   className="surface-inset w-20 px-3 py-2 text-right text-[13px] tabular outline-none"
@@ -871,7 +914,7 @@ export function ThemeManage() {
             <span className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
               输入 0–100 的整数。100 = 完全不透明（与默认主题一致），数值越低卡片越通透、越能透出背景图。
               {hasBackgroundImage
-                ? " 低于 95 时会自动叠加磨砂玻璃与可读性遮罩，保证文字清晰。"
+                ? " 低于 95 时会自动在背景图上叠加可读性遮罩，保证文字清晰；卡片本身保持纯半透明，各设备观感一致。"
                 : " 需先在上方设置背景图后才会生效。"}
             </span>
           </div>
@@ -895,8 +938,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftShowHomeOverview}
-              onChange={(event) => setDraftShowHomeOverview(event.target.checked)}
+              checked={draft.showHomeOverview}
+              onChange={(event) => patch("showHomeOverview", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -911,8 +954,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftShowGroupTabs}
-              onChange={(event) => setDraftShowGroupTabs(event.target.checked)}
+              checked={draft.showGroupTabs}
+              onChange={(event) => patch("showGroupTabs", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -927,8 +970,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftEnableHomeSort}
-              onChange={(event) => setDraftEnableHomeSort(event.target.checked)}
+              checked={draft.enableHomeSort}
+              onChange={(event) => patch("enableHomeSort", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -947,10 +990,10 @@ export function ThemeManage() {
                 <button
                   key={field}
                   type="button"
-                  data-active={draftHomeSortField === field ? "true" : "false"}
-                  aria-pressed={draftHomeSortField === field}
-                  disabled={!draftEnableHomeSort}
-                  onClick={() => setDraftHomeSortField(field)}
+                  data-active={draft.homeSortField === field ? "true" : "false"}
+                  aria-pressed={draft.homeSortField === field}
+                  disabled={!draft.enableHomeSort}
+                  onClick={() => patch("homeSortField", field)}
                 >
                   {HOME_SORT_FIELD_LABELS[field]}
                 </button>
@@ -962,19 +1005,19 @@ export function ThemeManage() {
             <div className="instance-segmented">
               <button
                 type="button"
-                data-active={draftHomeSortDirection === "asc" ? "true" : "false"}
-                aria-pressed={draftHomeSortDirection === "asc"}
-                disabled={!draftEnableHomeSort}
-                onClick={() => setDraftHomeSortDirection("asc")}
+                data-active={draft.homeSortDirection === "asc" ? "true" : "false"}
+                aria-pressed={draft.homeSortDirection === "asc"}
+                disabled={!draft.enableHomeSort}
+                onClick={() => patch("homeSortDirection", "asc")}
               >
                 升序
               </button>
               <button
                 type="button"
-                data-active={draftHomeSortDirection === "desc" ? "true" : "false"}
-                aria-pressed={draftHomeSortDirection === "desc"}
-                disabled={!draftEnableHomeSort}
-                onClick={() => setDraftHomeSortDirection("desc")}
+                data-active={draft.homeSortDirection === "desc" ? "true" : "false"}
+                aria-pressed={draft.homeSortDirection === "desc"}
+                disabled={!draft.enableHomeSort}
+                onClick={() => patch("homeSortDirection", "desc")}
               >
                 降序
               </button>
@@ -1051,8 +1094,8 @@ export function ThemeManage() {
               <span>启用</span>
               <input
                 type="checkbox"
-                checked={draftShowOverviewRatings}
-                onChange={(event) => setDraftShowOverviewRatings(event.target.checked)}
+                checked={draft.showOverviewRatings}
+                onChange={(event) => patch("showOverviewRatings", event.target.checked)}
                 className="h-4 w-4 accent-[var(--accent-500)]"
               />
             </label>
@@ -1069,10 +1112,10 @@ export function ThemeManage() {
                     <button
                       key={option.value}
                       type="button"
-                      data-active={draftOverviewRatingStyle === option.value ? "true" : "false"}
-                      aria-pressed={draftOverviewRatingStyle === option.value}
-                      disabled={!draftShowOverviewRatings}
-                      onClick={() => setDraftOverviewRatingStyle(option.value)}
+                      data-active={draft.overviewRatingStyle === option.value ? "true" : "false"}
+                      aria-pressed={draft.overviewRatingStyle === option.value}
+                      disabled={!draft.showOverviewRatings}
+                      onClick={() => patch("overviewRatingStyle", option.value)}
                     >
                       {option.label}
                     </button>
@@ -1084,9 +1127,9 @@ export function ThemeManage() {
                   <span>累计流量</span>
                   <input
                     type="checkbox"
-                    checked={draftShowTrafficRating}
-                    disabled={!draftShowOverviewRatings}
-                    onChange={(event) => setDraftShowTrafficRating(event.target.checked)}
+                    checked={draft.showTrafficRating}
+                    disabled={!draft.showOverviewRatings}
+                    onChange={(event) => patch("showTrafficRating", event.target.checked)}
                     className="h-4 w-4 accent-[var(--accent-500)]"
                   />
                 </label>
@@ -1094,9 +1137,9 @@ export function ThemeManage() {
                   <span>实时带宽</span>
                   <input
                     type="checkbox"
-                    checked={draftShowBandwidthRating}
-                    disabled={!draftShowOverviewRatings}
-                    onChange={(event) => setDraftShowBandwidthRating(event.target.checked)}
+                    checked={draft.showBandwidthRating}
+                    disabled={!draft.showOverviewRatings}
+                    onChange={(event) => patch("showBandwidthRating", event.target.checked)}
                     className="h-4 w-4 accent-[var(--accent-500)]"
                   />
                 </label>
@@ -1104,9 +1147,9 @@ export function ThemeManage() {
                   <span>资产概览</span>
                   <input
                     type="checkbox"
-                    checked={draftShowAssetRating}
-                    disabled={!draftShowOverviewRatings}
-                    onChange={(event) => setDraftShowAssetRating(event.target.checked)}
+                    checked={draft.showAssetRating}
+                    disabled={!draft.showOverviewRatings}
+                    onChange={(event) => patch("showAssetRating", event.target.checked)}
                     className="h-4 w-4 accent-[var(--accent-500)]"
                   />
                 </label>
@@ -1117,7 +1160,7 @@ export function ThemeManage() {
               {OVERVIEW_RATING_LABEL_FIELDS.map((field) => {
                 const defaultLabel = getDefaultOverviewRatingLabelText(
                   field.key,
-                  draftOverviewRatingStyle,
+                  draft.overviewRatingStyle,
                 );
                 return (
                   <label key={field.key} className="flex min-w-0 flex-col gap-2">
@@ -1125,8 +1168,8 @@ export function ThemeManage() {
                       {field.title}
                     </span>
                     <input
-                      value={draftRatingLabels[field.key]}
-                      disabled={!draftShowOverviewRatings}
+                      value={draft.ratingLabels[field.key]}
+                      disabled={!draft.showOverviewRatings}
                       onChange={(event) => setRatingLabelDraft(field.key, event.target.value)}
                       placeholder={defaultLabel}
                       className="surface-inset w-full px-3 py-2 text-[13px] outline-none disabled:opacity-60"
@@ -1152,8 +1195,8 @@ export function ThemeManage() {
             隐藏列表
           </span>
           <textarea
-            value={draftHiddenNodesText}
-            onChange={(event) => setDraftHiddenNodesText(event.target.value)}
+            value={draft.hiddenNodesText}
+            onChange={(event) => patch("hiddenNodesText", event.target.value)}
             placeholder="每行一个节点名称 / UUID，也可以用逗号分隔"
             className="surface-inset min-h-[112px] w-full resize-y px-3 py-2 text-[13px] outline-none"
           />
@@ -1165,7 +1208,7 @@ export function ThemeManage() {
 
       <InstancePanel
         title="小卡片显示项"
-        description="控制小卡片中间信息块的密度；实时速率始终显示，其他两项可以按需隐藏。"
+        description="控制小卡片中间信息块的密度；实时速率始终显示，其他项可以按需隐藏。"
         aside={<Rows3 size={16} />}
       >
         <div className="grid gap-3 md:grid-cols-2">
@@ -1180,8 +1223,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftCompactShowTrafficTotal}
-              onChange={(event) => setDraftCompactShowTrafficTotal(event.target.checked)}
+              checked={draft.compactShowTrafficTotal}
+              onChange={(event) => patch("compactShowTrafficTotal", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -1196,8 +1239,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftCompactShowBilling}
-              onChange={(event) => setDraftCompactShowBilling(event.target.checked)}
+              checked={draft.compactShowBilling}
+              onChange={(event) => patch("compactShowBilling", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -1212,8 +1255,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftCompactShowUptime}
-              onChange={(event) => setDraftCompactShowUptime(event.target.checked)}
+              checked={draft.compactShowUptime}
+              onChange={(event) => patch("compactShowUptime", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -1228,8 +1271,8 @@ export function ThemeManage() {
             </span>
             <input
               type="checkbox"
-              checked={draftShowConnections}
-              onChange={(event) => setDraftShowConnections(event.target.checked)}
+              checked={draft.showConnections}
+              onChange={(event) => patch("showConnections", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>
@@ -1249,8 +1292,8 @@ export function ThemeManage() {
               </span>
               <input
                 type="checkbox"
-                checked={draftShowCostSummary}
-                onChange={(event) => setDraftShowCostSummary(event.target.checked)}
+                checked={draft.showCostSummary}
+                onChange={(event) => patch("showCostSummary", event.target.checked)}
                 className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
               />
             </label>
@@ -1265,9 +1308,9 @@ export function ThemeManage() {
               </span>
               <input
                 type="checkbox"
-                checked={draftShowCostSummaryFloatingButton}
+                checked={draft.showCostSummaryFloatingButton}
                 onChange={(event) =>
-                  setDraftShowCostSummaryFloatingButton(event.target.checked)
+                  patch("showCostSummaryFloatingButton", event.target.checked)
                 }
                 className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
               />
@@ -1277,8 +1320,8 @@ export function ThemeManage() {
                 实时汇率接口
               </span>
               <input
-                value={draftCostRateApiUrl}
-                onChange={(event) => setDraftCostRateApiUrl(event.target.value)}
+                value={draft.costRateApiUrl}
+                onChange={(event) => patch("costRateApiUrl", event.target.value)}
                 placeholder={DEFAULT_THEME_SETTINGS.costRateApiUrl}
                 aria-invalid={draftCostRateApiUrlInvalid}
                 className="surface-inset w-full px-3 py-2 text-[13px] outline-none"
@@ -1295,12 +1338,92 @@ export function ThemeManage() {
               忽略计费节点
             </span>
             <textarea
-              value={draftCostIgnoredText}
-              onChange={(event) => setDraftCostIgnoredText(event.target.value)}
+              value={draft.costIgnoredText}
+              onChange={(event) => patch("costIgnoredText", event.target.value)}
               placeholder="每行一个节点名称 / UUID，也可以用逗号分隔"
               className="surface-inset min-h-[112px] w-full resize-y px-3 py-2 text-[13px] outline-none"
             />
           </label>
+        </div>
+      </InstancePanel>
+
+      <InstancePanel
+        title="收购溢价"
+        description="记录实际收购某台节点时多花/少花的钱（可正可负），只在资产统计的明细里展示，不参与剩余价值/年化/月均等任何汇总计算。留空即视为没有溢价。"
+        aside={
+          <div className="text-[11px] text-[var(--text-tertiary)]">
+            {clientsLoading ? "载入中" : `已设置 ${premiumConfiguredCount} 个节点`}
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <label className="surface-inset flex items-center gap-2 px-3 py-2">
+            <Search size={14} className="text-[var(--text-tertiary)]" />
+            <input
+              value={premiumSearch}
+              onChange={(event) => setPremiumSearch(event.target.value)}
+              placeholder="搜索节点名称 / UUID / 分组 / 地区"
+              aria-label="搜索节点"
+              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--text-tertiary)]"
+            />
+          </label>
+
+          {clientsLoading && (
+            <div className="flex min-h-[15vh] items-center justify-center">
+              <Spinner size={24} />
+            </div>
+          )}
+
+          {!clientsLoading && sortedClients.length === 0 && (
+            <div className="theme-manage-empty-state">
+              <span>还没有任何节点。</span>
+            </div>
+          )}
+
+          {!clientsLoading && sortedClients.length > 0 && filteredPremiumClients.length === 0 && (
+            <div className="surface-inset px-4 py-5 text-[13px] text-[var(--text-secondary)]">
+              没有匹配的节点。
+            </div>
+          )}
+
+          {!clientsLoading && filteredPremiumClients.length > 0 && (
+            <div className="surface-inset max-h-[320px] overflow-y-auto">
+              {filteredPremiumClients.map((client) => (
+                <div
+                  key={client.uuid}
+                  className="flex items-center justify-between gap-3 border-b border-[var(--hairline)] px-3 py-2 last:border-b-0"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Flag region={client.region ?? ""} size={13} />
+                    <span
+                      className="truncate text-[13px] text-[var(--text-primary)]"
+                      title={client.name}
+                    >
+                      {client.name}
+                    </span>
+                    <span
+                      className="shrink-0 text-[11px] text-[var(--text-tertiary)]"
+                      title="该节点当前剩余价值（按账单周期折算，不含溢价）"
+                    >
+                      {premiumRateQuery.isLoading
+                        ? "计算中"
+                        : premiumReferenceByUuid.get(client.uuid) ?? "--"}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="any"
+                    value={draft.costPremiums[client.uuid] ?? ""}
+                    onChange={(event) => patchPremium(client.uuid, event.target.value)}
+                    placeholder="0"
+                    aria-label={`${client.name} 的收购溢价`}
+                    className="surface-inset w-24 shrink-0 px-2 py-1 text-right text-[13px] outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </InstancePanel>
 
@@ -1345,6 +1468,24 @@ export function ThemeManage() {
             </div>
           </div>
 
+          <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                未绑定节点显示模拟延迟
+              </span>
+              <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
+                未绑定 Ping 任务的在线节点在首页卡片显示前端生成的模拟数据（延迟 1-10ms、丢包
+                0%），仅用于视觉统一，不代表真实网络质量；离线节点仍显示“未配置”。
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.fakePingForUnbound}
+              onChange={(event) => patch("fakePingForUnbound", event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
+            />
+          </label>
+
           {(tasksLoading || clientsLoading) && (
             <div className="flex min-h-[20vh] items-center justify-center">
               <Spinner size={24} />
@@ -1370,7 +1511,7 @@ export function ThemeManage() {
             !clientsLoading &&
             !noTasksYet &&
             filteredTasks.map((task) => {
-              const assigned = draftBindings[String(task.id)] ?? [];
+              const assigned = draft.homepagePingBindings[String(task.id)] ?? [];
               const assignedSummary = summarizeNodes(assigned, clientsById);
               const isExpanded = expandedTaskId === task.id;
               const selectableVisibleClients = visibleClients.filter((client) => {
@@ -1423,7 +1564,7 @@ export function ThemeManage() {
                             selectableVisibleClients.length === 0 || allVisibleSelectableAssigned
                           }
                           onClick={() => {
-                            setDraftBindings((prev) =>
+                            patchBindings((prev) =>
                               applyAvailableClientAssignments(
                                 prev,
                                 task.id,
@@ -1440,7 +1581,7 @@ export function ThemeManage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setDraftBindings((prev) => {
+                            patchBindings((prev) => {
                               const next = { ...prev };
                               delete next[String(task.id)];
                               return pruneBindings(next);
@@ -1497,7 +1638,7 @@ export function ThemeManage() {
                                 checked={checked}
                                 onChange={(event) => {
                                   const nextChecked = event.target.checked;
-                                  setDraftBindings((prev) =>
+                                  patchBindings((prev) =>
                                     applyClientAssignment(prev, task.id, client.uuid, nextChecked),
                                   );
                                 }}

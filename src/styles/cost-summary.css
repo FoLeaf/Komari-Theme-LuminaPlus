@@ -160,6 +160,10 @@
   color: color-mix(in srgb, var(--status-success) 88%, var(--text-primary));
 }
 
+.cost-summary-metric[data-value-tone="red"] strong {
+  color: color-mix(in srgb, var(--status-error) 88%, var(--text-primary));
+}
+
 .cost-summary-detail-section {
   display: flex;
   min-height: 0;
@@ -232,8 +236,9 @@
     box-shadow 160ms ease;
 }
 
+/* 描边+浮起阴影与首页分组 tab 共享,见 home.css 的激活 tab 组选择器;这里只保留
+   本抽屉的背景与文字色(硬编码固定色,暗色沿用共享的浅色阴影,维持既有观感)。 */
 .cost-summary-sort-tab[data-active="true"] {
-  border-color: rgba(82, 82, 91, 0.28);
   background:
     linear-gradient(
       180deg,
@@ -241,14 +246,9 @@
       #f4f4f5 100%
     );
   color: #18181b;
-  box-shadow:
-    0 10px 22px -18px rgba(0, 0, 0, 0.34),
-    inset 0 0 0 1px rgba(82, 82, 91, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 [data-appearance="dark"] .cost-summary-sort-tab[data-active="true"] {
-  border-color: rgba(255, 255, 255, 0.12);
   background:
     linear-gradient(
       180deg,
@@ -271,9 +271,8 @@
 .cost-summary-detail-item {
   display: flex;
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  gap: 7px;
   border: 1px solid color-mix(in srgb, var(--hairline) 84%, transparent);
   border-radius: 14px;
   background: var(--surface-elev);
@@ -285,19 +284,20 @@
   opacity: 0.68;
 }
 
+.cost-summary-detail-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .cost-summary-detail-name {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
-}
-
-.cost-summary-detail-line {
-  display: flex;
-  min-width: 0;
-  align-items: center;
   gap: 7px;
-  width: 100%;
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.2;
@@ -314,6 +314,14 @@
   white-space: nowrap;
 }
 
+.cost-summary-detail-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .cost-summary-expire-label {
   flex: 0 0 auto;
   color: var(--text-tertiary);
@@ -325,9 +333,6 @@
 .cost-summary-price-chip {
   display: inline-flex;
   flex: 0 0 auto;
-  max-width: 8.5em;
-  min-width: 0;
-  overflow: hidden;
   border-radius: 6px;
   background: color-mix(in srgb, #3b82f6 13%, transparent);
   color: #2563eb;
@@ -335,7 +340,20 @@
   font-size: 11px;
   font-weight: 680;
   line-height: 1.15;
-  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-summary-premium-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cost-premium-color, var(--text-tertiary)) 13%, transparent);
+  color: var(--cost-premium-color, var(--text-tertiary));
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1.15;
   white-space: nowrap;
 }
 
@@ -538,13 +556,8 @@
 }
 
 @media (max-width: 460px) {
-  .cost-summary-header {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-
   .cost-summary-metric {
     min-height: 76px;
-    row-gap: 6px;
     padding: 12px 13px;
   }
 
@@ -567,19 +580,12 @@
     justify-content: flex-end;
   }
 
-  .cost-summary-sort-tabs {
-    width: min(190px, 100%);
-  }
-
   .cost-summary-detail-item {
     padding: 9px 11px;
-  }
-
-  .cost-summary-detail-line {
     gap: 6px;
   }
 
-  .cost-summary-price-chip {
-    max-width: 7.8em;
+  .cost-summary-detail-meta {
+    gap: 5px;
   }
 }
