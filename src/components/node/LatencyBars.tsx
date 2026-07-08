@@ -10,11 +10,12 @@ interface LatencyBarsProps {
   /** 归一化到 0..1 的分母(窗口内的最大延迟)。 */
   max: number;
   redrawKey?: string;
+  height?: number;
   onHoverIndex?: (index: number | null) => void;
 }
 
 /** 由聚合 ping 分桶驱动、像素对齐的延迟柱状图。 */
-export function LatencyBars({ buckets, max, redrawKey, onHoverIndex }: LatencyBarsProps) {
+export function LatencyBars({ buckets, max, redrawKey, height = 16, onHoverIndex }: LatencyBarsProps) {
   const bars = useMemo(
     () =>
       buckets.map((bucket) => ({
@@ -62,7 +63,7 @@ export function LatencyBars({ buckets, max, redrawKey, onHoverIndex }: LatencyBa
   return (
     <CanvasStrip
       className="health-bar-row"
-      height={16}
+      height={height}
       redrawKey={redrawKey}
       getHoverIndex={getHoverIndex}
       onHoverIndex={onHoverIndex}

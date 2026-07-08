@@ -28,7 +28,7 @@ import {
 import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
 
 export type Appearance = "system" | "light" | "dark";
-export type NodeViewMode = "large" | "compact";
+export type NodeViewMode = "large" | "compact" | "mini" | "list";
 
 export interface ResolvedThemeSettings {
   defaultAppearance: Appearance;
@@ -40,6 +40,8 @@ export interface ResolvedThemeSettings {
   fakePingForUnbound: boolean;
   showHomeOverview: boolean;
   showGroupTabs: boolean;
+  showRegionBar: boolean;
+  showCardGroup: boolean;
   homeGroupOrder: string[];
   enableHomeSort: boolean;
   homeSortField: HomeSortField;
@@ -79,6 +81,8 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   fakePingForUnbound: false,
   showHomeOverview: true,
   showGroupTabs: true,
+  showRegionBar: true,
+  showCardGroup: true,
   homeGroupOrder: [],
   enableHomeSort: true,
   homeSortField: "default",
@@ -120,7 +124,7 @@ function normalizeAppearance(
 }
 
 export function isNodeViewMode(value: unknown): value is NodeViewMode {
-  return value === "large" || value === "compact";
+  return value === "large" || value === "compact" || value === "mini" || value === "list";
 }
 
 function normalizeNodeViewMode(
@@ -128,6 +132,16 @@ function normalizeNodeViewMode(
   fallback: NodeViewMode,
 ): NodeViewMode {
   return isNodeViewMode(value) ? value : fallback;
+}
+
+// 列表档仅桌面可用(见 useViewMode 的 MOBILE_VIEW_MODES)。移动端即便配置里存了 "list"
+// (历史值/外部写入)也归一化回默认档,避免管理页无选中项、首页又强制回落 compact 的不一致。
+function normalizeMobileNodeViewMode(
+  value: unknown,
+  fallback: NodeViewMode,
+): NodeViewMode {
+  const mode = normalizeNodeViewMode(value, fallback);
+  return mode === "list" ? fallback : mode;
 }
 
 function enabledUnlessFalse(value: unknown) {
@@ -161,7 +175,7 @@ export function normalizeThemeSettings(
       settings?.desktopNodeViewMode,
       DEFAULT_THEME_SETTINGS.desktopNodeViewMode,
     ),
-    mobileNodeViewMode: normalizeNodeViewMode(
+    mobileNodeViewMode: normalizeMobileNodeViewMode(
       settings?.mobileNodeViewMode,
       DEFAULT_THEME_SETTINGS.mobileNodeViewMode,
     ),
@@ -172,6 +186,8 @@ export function normalizeThemeSettings(
     fakePingForUnbound: settings?.fakePingForUnbound === true,
     showHomeOverview: enabledUnlessFalse(settings?.showHomeOverview),
     showGroupTabs: enabledUnlessFalse(settings?.showGroupTabs),
+    showRegionBar: enabledUnlessFalse(settings?.showRegionBar),
+    showCardGroup: enabledUnlessFalse(settings?.showCardGroup),
     homeGroupOrder: normalizeHomeGroupOrder(settings?.homeGroupOrder),
     enableHomeSort: enabledUnlessFalse(settings?.enableHomeSort),
     ...normalizeHomeSortDefault(settings?.homeSortField, settings?.homeSortDirection),

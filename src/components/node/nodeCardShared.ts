@@ -41,6 +41,17 @@ export function pingEmptyLabels(hasHomepagePingBinding: boolean): { title: strin
     : { title: "未配置首页 Ping", text: "未配置" };
 }
 
+/**
+ * 列表档"系统"列文案:干净的发行版名(osName)拼上原始 os 串里的第一个版本号,得到
+ * 形如「Debian 12」「Ubuntu 22.04」的短标签。版本号截到 major.minor,不罗列 patch/代号
+ * (原始串常是 "Debian GNU/Linux 12 (bookworm)" 这种);没有版本号时只显示发行版名。
+ */
+export function formatOsLabel(osName: string, rawOs?: string | null): string {
+  if (!rawOs) return osName;
+  const match = rawOs.match(/\d+(?:\.\d+)?/);
+  return match ? `${osName} ${match[0]}` : osName;
+}
+
 /** 节点卡片头部"查看实例详情"链接的 title 和 aria-label。 */
 export function nodeDetailLinkLabels(name: string, osName: string) {
   return {

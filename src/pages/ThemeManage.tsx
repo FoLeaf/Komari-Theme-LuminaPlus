@@ -7,8 +7,10 @@ import {
   ChevronUp,
   CircleDollarSign,
   EyeOff,
+  Grid3x3,
   LayoutTemplate,
   LayoutGrid,
+  List,
   ListFilter,
   Moon,
   RefreshCw,
@@ -79,7 +81,11 @@ const APPEARANCE_OPTIONS = [
 const NODE_VIEW_MODE_OPTIONS = [
   { value: "large", label: "大卡片", icon: LayoutGrid },
   { value: "compact", label: "小卡片", icon: Rows3 },
+  { value: "mini", label: "迷你卡片", icon: Grid3x3 },
+  { value: "list", label: "列表", icon: List },
 ] as const;
+// 列表档仅桌面可用,移动端默认里不提供(见 useViewMode 的 MOBILE_VIEW_MODES)。
+const MOBILE_VIEW_MODE_OPTIONS = NODE_VIEW_MODE_OPTIONS.filter((option) => option.value !== "list");
 const BACKGROUND_SIZE_OPTIONS: Array<{ value: BackgroundSize; label: string }> = [
   { value: "cover", label: "填满" },
   { value: "contain", label: "完整" },
@@ -216,6 +222,8 @@ function pickManagedThemeSettings(settings: ResolvedThemeSettings) {
     fakePingForUnbound: settings.fakePingForUnbound,
     showHomeOverview: settings.showHomeOverview,
     showGroupTabs: settings.showGroupTabs,
+    showRegionBar: settings.showRegionBar,
+    showCardGroup: settings.showCardGroup,
     homeGroupOrder: settings.homeGroupOrder,
     enableHomeSort: settings.enableHomeSort,
     homeSortField: settings.homeSortField,
@@ -779,7 +787,7 @@ export function ThemeManage() {
               </div>
             </div>
             <div className="instance-segmented is-scrollable">
-              {NODE_VIEW_MODE_OPTIONS.map(({ value, label, icon: Icon }) => (
+              {MOBILE_VIEW_MODE_OPTIONS.map(({ value, label, icon: Icon }) => (
                 <button
                   key={value}
                   type="button"
@@ -956,6 +964,38 @@ export function ThemeManage() {
               type="checkbox"
               checked={draft.showGroupTabs}
               onChange={(event) => patch("showGroupTabs", event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
+            />
+          </label>
+          <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                显示地区筛选
+              </span>
+              <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
+                按节点地区生成国旗筛选栏，点击某地区只看该地区节点。
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.showRegionBar}
+              onChange={(event) => patch("showRegionBar", event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
+            />
+          </label>
+          <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                卡片显示分组
+              </span>
+              <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
+                关闭后卡片内不再显示节点分组名（不影响分组筛选栏与备注）。
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              checked={draft.showCardGroup}
+              onChange={(event) => patch("showCardGroup", event.target.checked)}
               className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
             />
           </label>

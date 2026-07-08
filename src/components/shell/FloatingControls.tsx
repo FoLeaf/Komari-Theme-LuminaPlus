@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, LayoutGrid, Monitor, Palette, Rows3, Settings, SlidersHorizontal, Sun, Moon } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, List, Monitor, Palette, Rows3, Settings, SlidersHorizontal, Sun, Moon } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { MetricColorPicker } from "./MetricColorPicker";
 import { usePreferences } from "@/hooks/usePreferences";
-import { useViewMode, VIEW_MODE_CYCLE } from "@/hooks/useViewMode";
+import { useViewMode } from "@/hooks/useViewMode";
 import { useNodeStoreStatus } from "@/hooks/useNode";
 import { useAuth } from "@/hooks/useAuth";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
@@ -15,6 +15,8 @@ import { clsx } from "clsx";
 const VIEW_MODE_META: Record<NodeViewMode, { icon: typeof LayoutGrid; label: string }> = {
   large: { icon: LayoutGrid, label: "大视图" },
   compact: { icon: Rows3, label: "小视图" },
+  mini: { icon: Grid3x3, label: "迷你视图" },
+  list: { icon: List, label: "列表视图" },
 };
 
 const APPEARANCE_OPTIONS = [
@@ -34,7 +36,7 @@ export function FloatingControls() {
 
 function FloatingControlsInner() {
   const { appearance, setAppearance } = usePreferences();
-  const { mode, toggleMode } = useViewMode();
+  const { mode, nextMode, toggleMode } = useViewMode();
   const { data: me } = useAuth();
   const themeSettings = useThemeSettings();
   const { failureStreak } = useNodeStoreStatus();
@@ -49,9 +51,7 @@ function FloatingControlsInner() {
   const showSyncWarning = failureStreak >= 2;
   const hiddenTabIndex = collapsed ? -1 : undefined;
   const ToggleIcon = collapsed ? ChevronLeft : ChevronRight;
-  const nextViewMode =
-    VIEW_MODE_CYCLE[(VIEW_MODE_CYCLE.indexOf(mode) + 1) % VIEW_MODE_CYCLE.length];
-  const ViewIcon = VIEW_MODE_META[nextViewMode].icon;
+  const ViewIcon = VIEW_MODE_META[nextMode].icon;
   // 只要不在最宽松的大卡默认态,就视为"已切换"，按钮保持高亮。
   const isReducedView = mode !== "large";
 
@@ -96,7 +96,7 @@ function FloatingControlsInner() {
                   onClick={toggleMode}
                   aria-label="切换卡片视图"
                   aria-pressed={isReducedView}
-                  title={`临时切换到${VIEW_MODE_META[nextViewMode].label}`}
+                  title={`临时切换到${VIEW_MODE_META[nextMode].label}`}
                   tabIndex={hiddenTabIndex}
                   className={clsx(
                     "control-button grid h-9 w-9 place-items-center",

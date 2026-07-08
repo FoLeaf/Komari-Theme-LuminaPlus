@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useFakePingFallback } from "@/hooks/useFakePing";
 import { useNodeMeta, useNodeMetrics, useNodeTrafficTrend } from "@/hooks/useNode";
 import { useNodePingOverview, usePingBuckets } from "@/hooks/usePingOverview";
+import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { formatRenewalPrice } from "@/utils/billing";
 import { getExpireTextColor } from "@/utils/expireStatus";
 import {
@@ -21,6 +22,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
   const metrics = useNodeMetrics(uuid);
   const trafficTrend = useNodeTrafficTrend(uuid);
   const realPing = useNodePingOverview(uuid);
+  const showCardGroup = useThemeSettings().showCardGroup;
   // 未绑定首页 Ping 的在线节点按主题开关回退到模拟延迟(见 useFakePingFallback)。
   // 在这里替换意味着 NodeCard/CompactNodeCard 及下游的颜色、分桶全部自动生效。
   const ping = useFakePingFallback(uuid, realPing, metrics?.online === true);
@@ -31,7 +33,10 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
   const metaModel = useMemo(() => {
     if (!meta) return null;
     const tags = parseTags(meta.tags);
-    const subtitleParts = [meta.group, meta.public_remark]
+    // showCardGroup 关闭时,卡片内不显示节点分组名:既从副标题剔除 group(保留备注),
+    // 也不再用 group 作无 tags 时的兜底 chip。分组筛选栏(showGroupTabs)不受影响。
+    const group = showCardGroup ? meta.group : undefined;
+    const subtitleParts = [group, meta.public_remark]
       .map((part) => part?.trim())
       .filter((part): part is string => Boolean(part));
     const subtitleLabels = new Set(subtitleParts.map((part) => part.toLowerCase()));
@@ -41,8 +46,8 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
     const fallbackFooterTags =
       tags.length > 0
         ? tags
-        : meta.group
-          ? [{ label: meta.group, color: "gray" }]
+        : group
+          ? [{ label: group, color: "gray" }]
           : [];
     return {
       tags,
@@ -55,7 +60,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       osName: resolveOsInfo(meta.os).name,
       loadBaseline: meta.cpu_cores > 0 ? meta.cpu_cores : 4,
     };
-  }, [meta]);
+  }, [meta, showCardGroup]);
 
   // ping 派生的颜色只在 ping item 变化时才变。
   const pingModel = useMemo(

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
+import { Flag } from "@/components/ui/Flag";
 import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useHomeNodeSummaries } from "@/hooks/useNode";
 import { useHomepagePingOverview } from "@/hooks/usePingOverview";
@@ -17,9 +18,13 @@ import { speedRateColor } from "@/utils/metricTone";
 import {
   getHomeGroupLabel,
   getHomeGroupOptions,
+  getHomeRegionOptions,
   HOME_ALL_GROUP,
+  HOME_ALL_REGION,
   sortHomeGroupOptions,
+  type HomeRegionOption,
 } from "@/utils/homeNodes";
+import { getDisplayRegionCode } from "@/utils/geo";
 import { useHomeSort } from "@/hooks/useHomeSort";
 import { useHomeNodeOrder } from "@/hooks/useHomeNodeOrder";
 import { HomeSortControl } from "./HomeSortControl";
@@ -31,13 +36,18 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
 import { CostSummary } from "./CostSummary";
+import { MiniNodeCard } from "./MiniNodeCard";
 import { NodeCard } from "./NodeCard";
+import { NodeListView } from "./NodeListView";
 import type { NodeViewMode } from "@/utils/themeSettings";
 
-// 每档视图各自的网格密度(gap/最小列宽)。
+// 每档视图各自的网格密度(gap/最小列宽)。迷你档改由 .node-grid-mini 固定列数,minColumnWidth 不用。
 const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
   large: { className: "grid gap-4 xl:gap-5", minColumnWidth: 360 },
   compact: { className: "grid gap-3 xl:gap-4", minColumnWidth: 340 },
+  mini: { className: "grid gap-3 xl:gap-3.5", minColumnWidth: 260 },
+  // 列表档不走卡片网格(单独渲染 NodeListView),这两个值用不到,占位以满足 Record 穷尽。
+  list: { className: "", minColumnWidth: 0 },
 };
 
 // 把多个 uuid 拼成单个签名串作为 memo key。逗号安全:uuid 是标准 UUID
@@ -73,10 +83,12 @@ function HomeOverviewCards({
   assetRatingLabels,
   showDetailButton,
   onOpenCostSummary,
+  dense,
 }: {
   overview: HomeOverview;
   costSummary: { remainingCny: number } | null;
   costLoading: boolean;
+  dense: boolean;
   showOverviewRatings: boolean;
   overviewRatingStyle: OverviewRatingStyle;
   showTrafficRating: boolean;
@@ -141,7 +153,7 @@ function HomeOverviewCards({
     ) : null;
 
   return (
-    <section className="home-overview" aria-label="首页总览">
+    <section className={`home-overview${dense ? " is-dense" : ""}`} aria-label="首页总览">
       <article className="overview-card">
         <span className="overview-card-label">在线节点</span>
         <div className="overview-card-main">
@@ -270,6 +282,43 @@ function GroupTabs({
   );
 }
 
+// 地区筛选栏:按国旗聚合节点,点击某地区只看该地区;再点一次(或点已选中项)回到全部。
+// 与分组栏是两条独立筛选,可叠加(先分组、后地区)。
+function RegionTabs({
+  regions,
+  selectedRegion,
+  onSelectRegion,
+}: {
+  regions: HomeRegionOption[];
+  selectedRegion: string;
+  onSelectRegion: (region: string) => void;
+}) {
+  return (
+    <section className="home-region-bar" aria-label="地区筛选">
+      <div className="home-region-chips" role="group">
+        {regions.map(({ code, count }) => {
+          const active = selectedRegion === code;
+          return (
+            <button
+              key={code}
+              type="button"
+              className="home-region-chip"
+              data-active={active ? "true" : "false"}
+              aria-pressed={active}
+              onClick={() => onSelectRegion(active ? HOME_ALL_REGION : code)}
+              title={code}
+            >
+              <Flag region={code} size={14} />
+              <span className="home-region-chip-code">{code}</span>
+              <span className="home-region-chip-count">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function NodeGrid() {
   const nodes = useHomeNodeSummaries();
   const allMeta = useAllNodeMeta();
@@ -282,6 +331,7 @@ export function NodeGrid() {
   const sortField = sortEnabled ? sort.field : themeSettings.homeSortField;
   const sortDirection = sortEnabled ? sort.direction : themeSettings.homeSortDirection;
   const [selectedGroup, setSelectedGroup] = useState(HOME_ALL_GROUP);
+  const [selectedRegion, setSelectedRegion] = useState(HOME_ALL_REGION);
   const [costSummaryOpen, setCostSummaryOpen] = useState(false);
   useHomepagePingOverview();
 
@@ -401,12 +451,24 @@ export function NodeGrid() {
       ),
     [visibleNodes, themeSettings.homeGroupOrder, themeSettings.isReady],
   );
-  const filteredNodes = useMemo(
+  const groupFilteredNodes = useMemo(
     () =>
       selectedGroup === HOME_ALL_GROUP
         ? visibleNodes
         : visibleNodes.filter((node) => getHomeGroupLabel(node.group) === selectedGroup),
     [visibleNodes, selectedGroup],
+  );
+  // 地区选项在分组筛选之后统计,让国旗计数反映当前分组内的分布。
+  const regionOptions = useMemo(
+    () => getHomeRegionOptions(groupFilteredNodes),
+    [groupFilteredNodes],
+  );
+  const filteredNodes = useMemo(
+    () =>
+      selectedRegion === HOME_ALL_REGION
+        ? groupFilteredNodes
+        : groupFilteredNodes.filter((node) => getDisplayRegionCode(node.region) === selectedRegion),
+    [groupFilteredNodes, selectedRegion],
   );
   // 排序在分组筛选之后。离线永远沉底(写死,见 homeSort);实时网速走防抖(键平滑+滞回+5s 重排)。
   const orderedNodes = useHomeNodeOrder({
@@ -423,6 +485,23 @@ export function NodeGrid() {
     }
   }, [groupOptions, selectedGroup]);
 
+  // 选中的地区在当前分组里不存在了(切换分组/节点变化)就回到全部。
+  useEffect(() => {
+    if (
+      selectedRegion !== HOME_ALL_REGION &&
+      !regionOptions.some((option) => option.code === selectedRegion)
+    ) {
+      setSelectedRegion(HOME_ALL_REGION);
+    }
+  }, [regionOptions, selectedRegion]);
+
+  // 地区栏被配置关闭(热更新)时,清掉可能残留的地区筛选,否则会留下一个不可见的过滤条件。
+  useEffect(() => {
+    if (!themeSettings.showRegionBar && selectedRegion !== HOME_ALL_REGION) {
+      setSelectedRegion(HOME_ALL_REGION);
+    }
+  }, [themeSettings.showRegionBar, selectedRegion]);
+
   // summary 对象每隔约 1s tick 就换新引用,导致 filteredNodes(以及直接映射 uuid)
   // 不停重建。改用稳定的 uuid 签名作为卡片列表的 key,这样只有集合或顺序真正变化时
   // 才重渲染——每张卡各自订阅自己的 store 切片、独立更新。
@@ -430,26 +509,54 @@ export function NodeGrid() {
     () => orderedNodes.map((node) => node.uuid).join(UUID_KEY_SEPARATOR),
     [orderedNodes],
   );
-  const cards = useMemo(() => {
-    const uuids = uuidsKey ? uuidsKey.split(UUID_KEY_SEPARATOR) : [];
-    return uuids.map((uuid) => (
-      <div key={uuid} className="min-w-0">
-        {mode === "compact" ? (
-          <CompactNodeCard uuid={uuid} />
-        ) : (
-          <NodeCard uuid={uuid} />
-        )}
-      </div>
-    ));
-  }, [uuidsKey, mode]);
+  const orderedUuids = useMemo(
+    () => (uuidsKey ? uuidsKey.split(UUID_KEY_SEPARATOR) : []),
+    [uuidsKey],
+  );
+  // 列表档由下方 NodeListView 渲染,这里不必构造卡片元素。
+  const cards = useMemo(
+    () =>
+      mode === "list"
+        ? null
+        : orderedUuids.map((uuid) => (
+            <div key={uuid} className="min-w-0">
+              {mode === "mini" ? (
+                <MiniNodeCard uuid={uuid} />
+              ) : mode === "compact" ? (
+                <CompactNodeCard uuid={uuid} />
+              ) : (
+                <NodeCard uuid={uuid} />
+              )}
+            </div>
+          )),
+    [orderedUuids, mode],
+  );
   const showGroupTabs =
     themeSettings.isReady && themeSettings.showGroupTabs && groupOptions.length > 0;
+  // 地区栏:只有一个地区时筛选无意义,>1 才显示。
+  const showRegionBar =
+    themeSettings.isReady && themeSettings.showRegionBar && regionOptions.length > 1;
   // 节点多于一个才有排序意义;空/单节点时不显示控件。
   const showHomeSort = sortEnabled && visibleNodes.length > 1;
-  // 分组标签栏和卡片网格共用,让标签栏处在同一网格中、正好占一列卡片宽——
-  // 边缘和第一张卡片对齐。
+  // 分组标签栏与卡片网格共用列定义,让标签栏左缘对齐首卡。迷你档用 .node-grid-mini 固定列数,
+  // 不写内联 gridTemplateColumns(内联会盖过 class);其余档按最小列宽 auto-fill。
+  const isMini = mode === "mini";
+  const isList = mode === "list";
   const { className: gridClassName, minColumnWidth } = GRID_LAYOUT[mode];
-  const gridColumns = `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))`;
+  const gridWrapClassName = isMini ? `${gridClassName} node-grid-mini` : gridClassName;
+  const gridStyle = isMini
+    ? undefined
+    : { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))` };
+  // 控件栏统一走卡片网格形式(分组标签占首列、排序钉末列右对齐)。迷你/列表档不套用各自的
+  // 卡片列宽(迷你的固定列会把分组栏压成一张迷你卡宽,与大卡小卡不一致),统一借用小卡列定义,
+  // 让四档的分组栏/排序排布保持同一套设计语言。
+  const borrowControlsGrid = isMini || isList;
+  const controlsWrapClassName = borrowControlsGrid
+    ? "grid gap-3 home-controls-bar mb-4"
+    : `${gridWrapClassName} home-controls-bar mb-4`;
+  const controlsStyle = borrowControlsGrid
+    ? { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, 340px), 1fr))` }
+    : gridStyle;
 
   if (!themeSettings.isReady) {
     return (
@@ -472,6 +579,7 @@ export function NodeGrid() {
       {showHomeOverview && (
         <HomeOverviewCards
           overview={overview}
+          dense={mode === "mini" || mode === "list"}
           showDetailButton={showCostDetailButton}
           costSummary={costSummary}
           costLoading={costLoading}
@@ -505,12 +613,8 @@ export function NodeGrid() {
     <>
       {homeHeader}
       {(showGroupTabs || showHomeSort) && (
-        // 复用卡片网格的列定义:分组标签落第一列(=一张卡宽,随响应式动态变化、左缘对齐首卡,
-        // 沿用旧行为);排序控件钉最后一列右对齐。窄屏只剩 1 列时排序自动落到下一行右对齐。
-        <div
-          className={`${gridClassName} home-controls-bar mb-4`}
-          style={{ gridTemplateColumns: gridColumns }}
-        >
+        // 分组标签落首列(左缘对齐首卡)、排序钉末列右对齐;窄屏只剩 1 列时排序自动换到下一行。
+        <div className={controlsWrapClassName} style={controlsStyle}>
           {showGroupTabs && (
             <GroupTabs
               groups={groupOptions}
@@ -521,9 +625,20 @@ export function NodeGrid() {
           {showHomeSort && <HomeSortControl state={sort} />}
         </div>
       )}
-      <div className={gridClassName} style={{ gridTemplateColumns: gridColumns }}>
-        {cards}
-      </div>
+      {showRegionBar && (
+        <RegionTabs
+          regions={regionOptions}
+          selectedRegion={selectedRegion}
+          onSelectRegion={setSelectedRegion}
+        />
+      )}
+      {isList ? (
+        <NodeListView uuids={orderedUuids} />
+      ) : (
+        <div className={gridWrapClassName} style={gridStyle}>
+          {cards}
+        </div>
+      )}
     </>
   );
 }

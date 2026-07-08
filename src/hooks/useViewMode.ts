@@ -7,9 +7,10 @@ import { isNodeViewMode, type NodeViewMode } from "@/utils/themeSettings";
 const DESKTOP_OVERRIDE_KEY = "komaritheme:node-view-mode-session:desktop";
 const MOBILE_OVERRIDE_KEY = "komaritheme:node-view-mode-session:mobile";
 const MOBILE_QUERY = "(max-width: 720px)";
-// 快捷切换按钮的循环顺序:大卡 → 小卡 → 大卡……导出给 FloatingControls 算"下一档"
-// 图标/文案,避免两处各写一份顺序而漂移。
-export const VIEW_MODE_CYCLE: NodeViewMode[] = ["large", "compact"];
+// 快捷切换按钮的循环顺序:大卡 → 小卡 → 迷你 → 列表 → 大卡……
+export const VIEW_MODE_CYCLE: NodeViewMode[] = ["large", "compact", "mini", "list"];
+// 列表档天生不适合窄屏,仅桌面可用:移动端从循环里剔除,且默认值解析成 list 时兜底回 compact。
+const MOBILE_VIEW_MODES: NodeViewMode[] = ["large", "compact", "mini"];
 
 interface ViewModeState {
   device: "desktop" | "mobile";
@@ -159,11 +160,15 @@ function subscribe(listener: () => void) {
 export function useViewMode() {
   const themeSettings = useThemeSettings();
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const defaultMode =
-    state.device === "mobile"
-      ? themeSettings.mobileNodeViewMode
-      : themeSettings.desktopNodeViewMode;
-  const mode = state.override ?? defaultMode;
+  const isMobile = state.device === "mobile";
+  const defaultMode = isMobile
+    ? themeSettings.mobileNodeViewMode
+    : themeSettings.desktopNodeViewMode;
+  const resolved = state.override ?? defaultMode;
+  // 移动端若被解析成 list(默认值被强制写成 list 等极端情况),兜底回 compact —— 列表仅桌面可用。
+  const mode = isMobile && resolved === "list" ? "compact" : resolved;
+  const cycle = isMobile ? MOBILE_VIEW_MODES : VIEW_MODE_CYCLE;
+  const nextMode = cycle[(cycle.indexOf(mode) + 1) % cycle.length] ?? cycle[0];
 
   const setMode = useCallback(
     (next: NodeViewMode) => {
@@ -182,14 +187,13 @@ export function useViewMode() {
   );
 
   const toggleMode = useCallback(() => {
-    const currentIndex = VIEW_MODE_CYCLE.indexOf(mode);
-    const nextIndex = (currentIndex + 1) % VIEW_MODE_CYCLE.length;
-    setMode(VIEW_MODE_CYCLE[nextIndex]);
-  }, [mode, setMode]);
+    setMode(nextMode);
+  }, [nextMode, setMode]);
 
   return {
     device: state.device,
     mode,
+    nextMode,
     setMode,
     toggleMode,
   };
