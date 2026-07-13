@@ -90,7 +90,7 @@ export function Home() {
   }
 
   return (
-    <div className="py-2">
+    <div className="relative py-2">
       <NodeGrid />
     </div>
   );

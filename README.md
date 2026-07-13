@@ -130,6 +130,16 @@
 - [komari-theme-Lumina](https://github.com/stqfdyr/komari-theme-Lumina)
 - [Komari 主题开发文档](https://komari-document.pages.dev/)
 
+## 本地 UI 审查
+
+无需连接 Komari 后端也可以检查完整数据界面：
+
+```bash
+npm run dev -- --host 0.0.0.0
+```
+
+打开开发地址并追加 `?mock=1`。该模式只在 Vite 开发环境启用，会提供正常、高负载、临期、离线、多地区与多币种节点；生产构建不会包含这份测试数据。去掉查询参数即可恢复真实接口。
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=shanyang242%2FKomari-Theme-LuminaPlus&type=timeline&legend=bottom-right">

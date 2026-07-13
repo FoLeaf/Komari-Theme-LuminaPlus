@@ -6,16 +6,16 @@
      布局和绘制——这是生产环境性能分析里的主要开销。`auto <length>` 保留一个占位尺寸让滚动条稳定;
      浏览器在首次渲染后记住每张卡片的真实高度,因此紧凑卡片(高度随计费/流量小块变化)滚动回来时
      不会跳动。该值只是首帧估算,并非沿用大卡片的 438px。 */
-  contain-intrinsic-size: auto 300px;
+  contain-intrinsic-size: auto 284px;
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 12px;
+  padding: 14px;
   color: var(--text-primary);
   transition:
-    transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
-    border-color 160ms ease;
+    border-color 160ms ease,
+    background 160ms ease;
 }
 
 .compact-node-header {
@@ -24,7 +24,7 @@
   align-items: center;
   justify-content: space-between;
   min-height: 30px;
-  gap: 12px;
+  gap: 10px;
 }
 
 .compact-node-title-wrap {
@@ -46,7 +46,7 @@
 
 .compact-node-title-row {
   min-width: 0;
-  gap: 8px;
+  gap: 7px;
 }
 
 .compact-node-title {
@@ -56,13 +56,24 @@
   white-space: nowrap;
   color: var(--text-primary);
   font-size: 15px;
-  font-weight: 720;
+  font-weight: 700;
   line-height: 1.2;
   transition: color 160ms ease;
 }
 
 .compact-node-title:hover {
   color: var(--progress-cpu);
+}
+
+.compact-node-card.is-offline .compact-node-title,
+.compact-node-card.is-offline .compact-node-title:hover {
+  color: color-mix(in srgb, var(--status-offline) 72%, var(--text-primary) 28%);
+}
+
+.compact-node-title:focus-visible,
+.compact-node-detail-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .compact-node-subtitle {
@@ -94,20 +105,18 @@
   width: 30px;
   height: 30px;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-elev-a) 58%, transparent);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-tertiary);
   transition:
     background 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    color 160ms ease;
 }
 
 .compact-node-detail-link:hover {
-  background: color-mix(in srgb, var(--surface-elev-a) 78%, transparent);
+  background: var(--fill-tertiary);
   color: var(--progress-cpu);
-  transform: translateY(-1px);
 }
 
 .compact-node-chip-row {
@@ -165,16 +174,16 @@
 .compact-node-vitals {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
+  gap: 12px 16px;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  padding-top: 9px;
+  padding-top: 11px;
 }
 
 .compact-node-gauge {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .compact-node-gauge-head,
@@ -204,7 +213,7 @@
   flex: 0 0 auto;
   color: var(--text-primary);
   font-size: 13px;
-  font-weight: 780;
+  font-weight: 720;
   letter-spacing: -0.02em;
 }
 
@@ -213,7 +222,7 @@
    周期 = (100% + 2px) / 18,缝隙 = 每个周期的最后 2px。 */
 .compact-node-gauge-track {
   min-width: 0;
-  height: 8px;
+  height: 7px;
   overflow: hidden;
   background: linear-gradient(
     to right,
@@ -246,9 +255,12 @@
   --ci-shrink: max(0, var(--compact-info-columns, 3) - 2);
   display: grid;
   grid-template-columns: repeat(var(--compact-info-columns, 3), minmax(0, 1fr));
-  gap: calc(7px - var(--ci-shrink) * 0.8px);
-  border-top: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  padding-top: 8px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fill-tertiary) 72%, transparent);
+  padding-top: 0;
 }
 
 /* 必显的流量配额条。复用 .compact-node-gauge-track(由该容器上设置的 --compact-gauge-*
@@ -258,7 +270,7 @@
   min-width: 0;
   flex-direction: column;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  padding-top: 9px;
+  padding-top: 11px;
 }
 
 .compact-node-traffic-body {
@@ -363,16 +375,20 @@
   position: relative;
   display: flex;
   min-width: 0;
-  min-height: 48px;
+  min-height: 52px;
   flex-direction: column;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--fill-tertiary) 70%, transparent);
-  padding: calc(6px - var(--ci-shrink) * 0.4px) calc(8px - var(--ci-shrink) * 1px);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: calc(7px - var(--ci-shrink) * 0.4px) calc(10px - var(--ci-shrink) * 1px);
   color: var(--text-secondary);
   text-align: left;
+}
+
+.compact-node-info-tile + .compact-node-info-tile {
+  border-left: 1px solid var(--border-subtle);
 }
 
 .compact-node-info-content {
@@ -410,7 +426,7 @@
   overflow: hidden;
   color: var(--compact-info-row-color, var(--text-primary));
   font-size: calc(11.5px - var(--ci-shrink) * 0.6px);
-  font-weight: 760;
+  font-weight: 700;
   letter-spacing: calc(var(--ci-shrink) * -0.01em);
   text-align: right;
   text-overflow: ellipsis;
@@ -467,7 +483,7 @@
   align-items: end;
   gap: 10px;
   border-top: 1px solid color-mix(in srgb, var(--hairline) 88%, transparent);
-  padding-top: 9px;
+  padding-top: 11px;
 }
 
 .compact-node-health-item {
@@ -490,7 +506,7 @@
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 720;
   letter-spacing: -0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -503,7 +519,7 @@
   align-items: end;
   gap: 1.5px;
   min-width: 0;
-  height: 14px;
+  height: 13px;
   overflow: visible;
 }
 
@@ -597,7 +613,7 @@
   }
 
   .compact-node-info-tile {
-    min-height: 46px;
+    min-height: 48px;
     padding: 6px;
   }
 

@@ -44,12 +44,15 @@ import {
 } from "@/utils/background";
 import {
   calculateCostSummary,
+  calculateCostPremiumAmount,
   formatCnyMoney,
+  formatSignedCny,
   getExchangeRates,
   isCostRateApiUrlValid,
   normalizeCostIgnoredNodes,
   normalizeCostPremiums,
   normalizeCostRateApiUrl,
+  type CostPremiumEntry,
 } from "@/utils/cost";
 import { normalizeNodeIdentityList } from "@/utils/nodeIdentity";
 import {
@@ -68,7 +71,6 @@ import {
 } from "@/utils/themeSettings";
 import {
   getDefaultOverviewRatingLabelText,
-  OVERVIEW_RATING_STYLES,
   type OverviewRatingKind,
 } from "@/utils/overviewRating";
 import { HOME_SORT_FIELDS, HOME_SORT_FIELD_LABELS } from "@/utils/homeSort";
@@ -97,13 +99,23 @@ const BACKGROUND_POSITION_OPTIONS: Array<{ value: BackgroundPosition; label: str
   { value: "bottom", label: "底部" },
 ];
 
+function localDateInputMax() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
 const OVERVIEW_RATING_LABEL_FIELDS: Array<{
   key: OverviewRatingKind;
   title: string;
+  toggleKey: "showTrafficRating" | "showBandwidthRating" | "showAssetRating";
 }> = [
-  { key: "traffic", title: "累计流量评级名称" },
-  { key: "bandwidth", title: "实时带宽评级名称" },
-  { key: "asset", title: "资产评级名称" },
+  { key: "traffic", title: "累计流量", toggleKey: "showTrafficRating" },
+  { key: "bandwidth", title: "实时带宽", toggleKey: "showBandwidthRating" },
+  { key: "asset", title: "资产概览", toggleKey: "showAssetRating" },
 ];
 
 function sortTasks(tasks: PingTask[]) {
@@ -112,6 +124,20 @@ function sortTasks(tasks: PingTask[]) {
     if (left.id !== right.id) return left.id - right.id;
     return left.name.localeCompare(right.name);
   });
+}
+
+// 键序固定为 { amount, paidCny?, acquiredAt? },与 normalizeCostPremiums 一致,
+// 否则 dirty/reseed 的 JSON.stringify 签名会误报。
+function buildPremiumEntry(
+  amount: number,
+  paidCny?: number,
+  acquiredAt?: string,
+): CostPremiumEntry {
+  return {
+    amount,
+    ...(paidCny != null ? { paidCny } : {}),
+    ...(acquiredAt ? { acquiredAt } : {}),
+  };
 }
 
 function sortClients(clients: AdminClient[]) {
@@ -231,7 +257,6 @@ function pickManagedThemeSettings(settings: ResolvedThemeSettings) {
     showCostSummary: settings.showCostSummary,
     showCostSummaryFloatingButton: settings.showCostSummaryFloatingButton,
     showOverviewRatings: settings.showOverviewRatings,
-    overviewRatingStyle: settings.overviewRatingStyle,
     showTrafficRating: settings.showTrafficRating,
     showBandwidthRating: settings.showBandwidthRating,
     showAssetRating: settings.showAssetRating,
@@ -455,7 +480,7 @@ export function ThemeManage() {
   }, [premiumSearch, sortedClients]);
 
   // 溢价表格里"当前剩余价值"仅供参考,用已保存的汇率源/忽略名单算(不用草稿里还没保存的
-  // 编辑),口径与资产统计面板完全一致(同一个 calculateCostSummary),但不叠加溢价本身。
+  // 编辑),口径与资产统计页完全一致(同一个 calculateCostSummary),但不叠加溢价本身。
   // 刻意用一次性 getNodes 查询而不是 useAllNodeMeta():后者会启动全局节点 store 的实时
   // 状态轮询(wsStore),设置页只需要静态 meta,不该为一列参考值挂一个常驻轮询。
   const { data: allMeta = [] } = useQuery({
@@ -471,39 +496,73 @@ export function ThemeManage() {
     enabled: allMeta.length > 0,
     retry: 1,
   });
-  const premiumReferenceByUuid = useMemo(() => {
-    const map = new Map<string, string>();
+  const premiumDetailByUuid = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof calculateCostSummary>["details"][number]>();
     if (!premiumRateQuery.data) return map;
     const summary = calculateCostSummary(
       allMeta,
       sourceThemeSettings.costIgnoredNodes,
       premiumRateQuery.data.rates,
     );
-    for (const detail of summary.details) {
-      map.set(detail.uuid, detail.counted ? formatCnyMoney(detail.remainingCny) : detail.note || "--");
-    }
+    for (const detail of summary.details) map.set(detail.uuid, detail);
     return map;
   }, [allMeta, sourceThemeSettings.costIgnoredNodes, premiumRateQuery.data]);
 
-  // 只统计非零溢价的节点数,给面板的 aside 摘要用。
+  // 首次录入使用当前剩余价值作为折算基准；后续编辑由 paidCny-amount 还原并沿用该基准。
+  const currentPremiumBasis = useCallback(
+    (uuid: string): number | null => {
+      const detail = premiumDetailByUuid.get(uuid);
+      if (!detail) return null;
+      if (detail.note === "免费") return 0;
+      if (!detail.counted) return null;
+      return detail.remainingCny;
+    },
+    [premiumDetailByUuid],
+  );
+
   const premiumConfiguredCount = useMemo(
-    () => Object.keys(draft.costPremiums).filter((uuid) => draft.costPremiums[uuid] !== 0).length,
+    () => Object.keys(draft.costPremiums).length,
     [draft.costPremiums],
   );
 
-  const patchPremium = useCallback(
+  // 收购价清空即删条目;溢价在此刻算出并固化,不随后续续费/汇率漂移。
+  const patchPremiumPaid = useCallback(
     (uuid: string, rawValue: string) => {
       setDraft((prev) => {
         const next = { ...prev.costPremiums };
         if (rawValue.trim() === "") {
           if (!(uuid in next)) return prev;
           delete next[uuid];
-        } else {
-          const amount = Number(rawValue);
-          if (!Number.isFinite(amount)) return prev;
-          if (Object.is(prev.costPremiums[uuid], amount)) return prev;
-          next[uuid] = amount;
+          return { ...prev, costPremiums: next };
         }
+        const paid = Number(rawValue);
+        if (!Number.isFinite(paid) || paid < 0) return prev;
+        const current = prev.costPremiums[uuid];
+        if (current && Object.is(current.paidCny, paid)) return prev;
+        const basis = currentPremiumBasis(uuid);
+        if (basis == null) return prev;
+        const acquiredAt = current?.acquiredAt ?? localDateInputMax();
+        next[uuid] = buildPremiumEntry(
+          calculateCostPremiumAmount(paid, basis, current),
+          paid,
+          acquiredAt,
+        );
+        return { ...prev, costPremiums: next };
+      });
+    },
+    [currentPremiumBasis],
+  );
+
+  // 收购日期只决定摊销跨度，不回溯改写已经固化的溢价基准。
+  const patchPremiumAcquiredAt = useCallback(
+    (uuid: string, rawValue: string) => {
+      setDraft((prev) => {
+        const current = prev.costPremiums[uuid];
+        if (!current) return prev;
+        const acquiredAt = rawValue.trim() || undefined;
+        if (current.acquiredAt === acquiredAt) return prev;
+        const next = { ...prev.costPremiums };
+        next[uuid] = buildPremiumEntry(current.amount, current.paidCny, acquiredAt);
         return { ...prev, costPremiums: next };
       });
     },
@@ -655,46 +714,61 @@ export function ThemeManage() {
       normalizeBackgroundUrl(draft.backgroundImage) ||
         normalizeBackgroundUrl(draft.backgroundImageMobile),
     );
+  const acquiredAtMax = localDateInputMax();
 
   return (
-    <div className="flex flex-col gap-5 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to="/" className="instance-page-back">
-          <ArrowLeft size={14} />
-          返回首页
-        </Link>
-        <div className="theme-manage-toolbar-actions">
-          <button
-            type="button"
-            onClick={handleReset}
-            disabled={!isDirty || saving}
-            className="theme-manage-button"
-          >
-            <RefreshCw size={14} />
-            <span>重置</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!isDirty || saving || draftCostRateApiUrlInvalid}
-            className="theme-manage-button is-primary"
-          >
-            {saving ? <Spinner size={14} /> : <Save size={14} />}
-            <span>{saving ? "保存中" : "保存设置"}</span>
-          </button>
-        </div>
-      </div>
-
-      <InstancePanel
-        title="LuminaPlus 主题设置"
-        description="集中调整 LuminaPlus 的展示偏好与首页延迟绑定；保存后会立即应用到当前站点。"
-        aside={
-          <div className="text-right text-[11px] text-[var(--text-tertiary)]">
-            <div>主题: {config?.theme || "Komari-Theme-LuminaPlus"}</div>
-            <div>已绑定首页 Ping 节点 {assignedNodeCount} / {sortedClients.length}</div>
+    <div className="theme-manage flex flex-col gap-5 py-2">
+      <header className="theme-masthead">
+        <div className="theme-masthead-topline">
+          <Link to="/" className="instance-page-back">
+            <ArrowLeft size={14} />
+            返回首页
+          </Link>
+          <div className="theme-manage-toolbar-actions">
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={!isDirty || saving}
+              className="theme-manage-button"
+            >
+              <RefreshCw size={14} />
+              <span>重置</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!isDirty || saving || draftCostRateApiUrlInvalid}
+              className="theme-manage-button is-primary"
+            >
+              {saving ? <Spinner size={14} /> : <Save size={14} />}
+              <span>{saving ? "保存中" : "保存设置"}</span>
+            </button>
           </div>
-        }
-      >
+        </div>
+        <div className="theme-masthead-main">
+          <div className="theme-masthead-headings">
+            <span className="theme-masthead-kicker">LUMINAPLUS · 主题控制台</span>
+            <h1 className="theme-masthead-title">主题设置</h1>
+            <p className="theme-masthead-desc">
+              集中调整 LuminaPlus 的展示偏好与首页延迟绑定；保存后立即应用到当前站点。
+            </p>
+          </div>
+          <dl className="theme-masthead-meta">
+            <div>
+              <dt>主题</dt>
+              <dd>{config?.theme || "Komari-Theme-LuminaPlus"}</dd>
+            </div>
+            <div>
+              <dt>已绑定 Ping</dt>
+              <dd>
+                {assignedNodeCount} / {sortedClients.length}
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </header>
+
+      {(message || error || adminError) && (
         <div className="flex flex-col gap-3">
           {message && (
             <div
@@ -722,9 +796,10 @@ export function ThemeManage() {
             </div>
           )}
         </div>
-      </InstancePanel>
+      )}
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">01</span>外观</>}
         title="默认外观"
         description="为首次访问或尚未手动切换外观的用户设置默认显示模式；后续仍可在首页右上角按需切换。"
         aside={<LayoutTemplate size={16} />}
@@ -747,6 +822,7 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">02</span>视图</>}
         title="默认卡片视图"
         description="分别设置桌面端与移动端的默认卡片尺寸；首页右上角按钮只临时切换当前设备的显示。"
         aside={<LayoutGrid size={16} />}
@@ -806,6 +882,7 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">03</span>背景</>}
         title="背景与透明度"
         description="为站点设置自定义背景图，并调节卡片不透明度。背景图可分别为浅色 / 深色与桌面 / 移动端设置；卡片不透明度调低后会自动叠加可读性遮罩。"
         aside={<Wallpaper size={16} />}
@@ -930,6 +1007,7 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">04</span>首页</>}
         title="首页巡检"
         description="控制首页顶部总览、分组筛选和节点排序方式；适合节点较多时快速查看状态。"
         aside={<ListFilter size={16} />}
@@ -1141,91 +1219,42 @@ export function ThemeManage() {
             </label>
           </div>
 
-          <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <div className="flex flex-col gap-3">
-              <div>
-                <div className="mb-2 text-[12px] font-medium text-[var(--text-secondary)]">
-                  评级风格
-                </div>
-                <div className="instance-segmented is-scrollable">
-                  {OVERVIEW_RATING_STYLES.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      data-active={draft.overviewRatingStyle === option.value ? "true" : "false"}
-                      aria-pressed={draft.overviewRatingStyle === option.value}
-                      disabled={!draft.showOverviewRatings}
-                      onClick={() => patch("overviewRatingStyle", option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <label className="flex items-center justify-between gap-2 rounded-[10px] border border-[var(--hairline)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
-                  <span>累计流量</span>
-                  <input
-                    type="checkbox"
-                    checked={draft.showTrafficRating}
-                    disabled={!draft.showOverviewRatings}
-                    onChange={(event) => patch("showTrafficRating", event.target.checked)}
-                    className="h-4 w-4 accent-[var(--accent-500)]"
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-2 rounded-[10px] border border-[var(--hairline)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
-                  <span>实时带宽</span>
-                  <input
-                    type="checkbox"
-                    checked={draft.showBandwidthRating}
-                    disabled={!draft.showOverviewRatings}
-                    onChange={(event) => patch("showBandwidthRating", event.target.checked)}
-                    className="h-4 w-4 accent-[var(--accent-500)]"
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-2 rounded-[10px] border border-[var(--hairline)] px-3 py-2 text-[12px] text-[var(--text-secondary)]">
-                  <span>资产概览</span>
-                  <input
-                    type="checkbox"
-                    checked={draft.showAssetRating}
-                    disabled={!draft.showOverviewRatings}
-                    onChange={(event) => patch("showAssetRating", event.target.checked)}
-                    className="h-4 w-4 accent-[var(--accent-500)]"
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-3">
-              {OVERVIEW_RATING_LABEL_FIELDS.map((field) => {
-                const defaultLabel = getDefaultOverviewRatingLabelText(
-                  field.key,
-                  draft.overviewRatingStyle,
-                );
-                return (
-                  <label key={field.key} className="flex min-w-0 flex-col gap-2">
-                    <span className="text-[12px] font-medium text-[var(--text-secondary)]">
-                      {field.title}
-                    </span>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            {OVERVIEW_RATING_LABEL_FIELDS.map((field) => {
+              const defaultLabel = getDefaultOverviewRatingLabelText(field.key);
+              const ratingEnabled = draft.showOverviewRatings && draft[field.toggleKey];
+              return (
+                <div key={field.key} className="flex min-w-0 flex-col gap-2">
+                  <label className="flex items-center justify-between gap-2 text-[12px] font-medium text-[var(--text-secondary)]">
+                    <span>{field.title}</span>
                     <input
-                      value={draft.ratingLabels[field.key]}
+                      type="checkbox"
+                      checked={draft[field.toggleKey]}
                       disabled={!draft.showOverviewRatings}
-                      onChange={(event) => setRatingLabelDraft(field.key, event.target.value)}
-                      placeholder={defaultLabel}
-                      className="surface-inset w-full px-3 py-2 text-[13px] outline-none disabled:opacity-60"
+                      onChange={(event) => patch(field.toggleKey, event.target.checked)}
+                      className="h-4 w-4 shrink-0 accent-[var(--accent-500)]"
                     />
-                    <span className="text-[11px] text-[var(--text-tertiary)]">
-                      例如: {defaultLabel}
-                    </span>
                   </label>
-                );
-              })}
-            </div>
+                  <input
+                    value={draft.ratingLabels[field.key]}
+                    disabled={!ratingEnabled}
+                    onChange={(event) => setRatingLabelDraft(field.key, event.target.value)}
+                    placeholder={defaultLabel}
+                    aria-label={`${field.title}评级名称`}
+                    className="surface-inset w-full px-3 py-2 text-[13px] outline-none disabled:opacity-60"
+                  />
+                  <span className="text-[11px] text-[var(--text-tertiary)]">
+                    例如: {defaultLabel}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">05</span>隐藏</>}
         title="隐藏节点"
         description="在此填写的节点会从首页彻底移除：不显示卡片，也不计入在线数、累计流量、实时带宽与资产等所有统计。对所有访客生效，清空即可恢复。"
         aside={<EyeOff size={16} />}
@@ -1247,6 +1276,7 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">06</span>卡片</>}
         title="小卡片显示项"
         description="控制小卡片中间信息块的密度；实时速率始终显示，其他项可以按需隐藏。"
         aside={<Rows3 size={16} />}
@@ -1320,15 +1350,21 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">07</span>花费</>}
         title="服务器花费"
-        description="首页花费统计会使用实时汇率计算年化总支出、月均支出与剩余价值；忽略列表中的节点不会计入费用。"
+        description="资产统计页（/assets）使用实时汇率计算年化总支出、月均支出与剩余价值；忽略列表中的节点不会计入费用。两个入口开关都关闭时，直接访问资产页也会跳回首页。"
         aside={<CircleDollarSign size={16} />}
       >
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
           <div className="flex flex-col gap-3">
             <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
-              <span className="min-w-0 text-[13px] font-medium text-[var(--text-primary)]">
-                显示首页花费统计
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                  显示资产页入口按钮
+                </span>
+                <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
+                  在首页资产概览卡右上角显示进入资产统计页的按钮。
+                </span>
               </span>
               <input
                 type="checkbox"
@@ -1343,7 +1379,7 @@ export function ThemeManage() {
                   显示资产悬浮按钮
                 </span>
                 <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
-                  关闭顶部总览时，仍可通过悬浮按钮打开资产详情。
+                  卡内入口不可用时（总览隐藏或其开关关闭），以悬浮按钮进入资产统计页。
                 </span>
               </span>
               <input
@@ -1388,8 +1424,9 @@ export function ThemeManage() {
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">08</span>溢价</>}
         title="收购溢价"
-        description="记录实际收购某台节点时多花/少花的钱（可正可负），只在资产统计的明细里展示，不参与剩余价值/年化/月均等任何汇总计算。留空即视为没有溢价。"
+        description="填写实际收购价（人民币），首次录入时按当前剩余价值计算并固化溢价（收购价 − 当前剩余价值，可正可负）；后续续费、汇率和收购日期变化不会改写该基准。收购日期默认今天，可调整为过去日期，仅用于计算溢价月摊与尚未摊销价值；免费节点的收购价全额记为溢价，留空即清除记录。"
         aside={
           <div className="text-[11px] text-[var(--text-tertiary)]">
             {clientsLoading ? "载入中" : `已设置 ${premiumConfiguredCount} 个节点`}
@@ -1428,46 +1465,99 @@ export function ThemeManage() {
 
           {!clientsLoading && filteredPremiumClients.length > 0 && (
             <div className="surface-inset max-h-[320px] overflow-y-auto">
-              {filteredPremiumClients.map((client) => (
-                <div
-                  key={client.uuid}
-                  className="flex items-center justify-between gap-3 border-b border-[var(--hairline)] px-3 py-2 last:border-b-0"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Flag region={client.region ?? ""} size={13} />
-                    <span
-                      className="truncate text-[13px] text-[var(--text-primary)]"
-                      title={client.name}
-                    >
-                      {client.name}
-                    </span>
-                    <span
-                      className="shrink-0 text-[11px] text-[var(--text-tertiary)]"
-                      title="该节点当前剩余价值（按账单周期折算，不含溢价）"
-                    >
-                      {premiumRateQuery.isLoading
-                        ? "计算中"
-                        : premiumReferenceByUuid.get(client.uuid) ?? "--"}
-                    </span>
+              {filteredPremiumClients.map((client) => {
+                const entry = draft.costPremiums[client.uuid];
+                const detail = premiumDetailByUuid.get(client.uuid);
+                const referenceLabel = premiumRateQuery.isLoading
+                  ? "计算中"
+                  : detail
+                    ? detail.counted
+                      ? formatCnyMoney(detail.remainingCny)
+                      : detail.note || "--"
+                    : "--";
+                const canCompute =
+                  detail != null && (detail.counted || detail.note === "免费");
+                return (
+                  <div
+                    key={client.uuid}
+                    className="flex items-center justify-between gap-3 border-b border-[var(--hairline)] px-3 py-2 last:border-b-0"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Flag region={client.region ?? ""} size={13} />
+                      <span
+                        className="truncate text-[13px] text-[var(--text-primary)]"
+                        title={client.name}
+                      >
+                        {client.name}
+                      </span>
+                      <span
+                        className="shrink-0 text-[11px] text-[var(--text-tertiary)]"
+                        title="该节点当前剩余价值（按账单周期折算，不含溢价）"
+                      >
+                        {referenceLabel}
+                      </span>
+                      {entry && (
+                        <span
+                          className="shrink-0 text-[11px] font-medium"
+                          style={{
+                            color:
+                              entry.amount > 0
+                                ? "var(--status-error)"
+                                : entry.amount < 0
+                                  ? "var(--status-success)"
+                                  : "var(--text-tertiary)",
+                          }}
+                          title={
+                            entry.paidCny != null
+                              ? "溢价 = 收购价 − 首次录入时的剩余价值；该折算基准已经固化"
+                              : "旧格式：直接记录的溢价，填写收购价后自动升级"
+                          }
+                        >
+                          溢价 {formatSignedCny(entry.amount)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        min="0"
+                        value={entry?.paidCny ?? ""}
+                        onChange={(event) => patchPremiumPaid(client.uuid, event.target.value)}
+                        placeholder="收购价"
+                        disabled={!canCompute}
+                        aria-label={`${client.name} 的收购价`}
+                        title={
+                          canCompute
+                            ? "实际收购价（人民币），留空即清除记录"
+                            : "该节点已忽略或汇率缺失，无法折算剩余价值"
+                        }
+                        className="surface-inset w-24 px-2 py-1 text-right text-[13px] outline-none disabled:opacity-45"
+                      />
+                      <input
+                        type="date"
+                        max={acquiredAtMax}
+                        value={entry?.acquiredAt ?? ""}
+                        onChange={(event) =>
+                          patchPremiumAcquiredAt(client.uuid, event.target.value)
+                        }
+                        disabled={!entry}
+                        aria-label={`${client.name} 的收购日期`}
+                        title="收购日期（可选）：仅用于计算溢价月摊和尚未摊销价值，不改写溢价"
+                        className="surface-inset w-[8.75rem] px-2 py-1 text-[12px] outline-none disabled:opacity-45"
+                      />
+                    </div>
                   </div>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="any"
-                    value={draft.costPremiums[client.uuid] ?? ""}
-                    onChange={(event) => patchPremium(client.uuid, event.target.value)}
-                    placeholder="0"
-                    aria-label={`${client.name} 的收购溢价`}
-                    className="surface-inset w-24 shrink-0 px-2 py-1 text-right text-[13px] outline-none"
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       </InstancePanel>
 
       <InstancePanel
+        kicker={<><span className="instance-panel-kicker-num">09</span>延迟</>}
         title="主页延迟检测"
         description={
           <>

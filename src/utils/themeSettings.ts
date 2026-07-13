@@ -11,6 +11,7 @@ import {
   normalizeCostIgnoredNodes,
   normalizeCostPremiums,
   normalizeCostRateApiUrl,
+  type CostPremiumEntry,
 } from "@/utils/cost";
 import { normalizeNodeIdentityList } from "@/utils/nodeIdentity";
 import { normalizeHomeGroupOrder } from "@/utils/homeNodes";
@@ -21,10 +22,6 @@ import {
   type HomeSortDirection,
   type HomeSortField,
 } from "@/utils/homeSort";
-import {
-  isOverviewRatingStyle,
-  type OverviewRatingStyle,
-} from "@/utils/overviewRating";
 import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
 
 export type Appearance = "system" | "light" | "dark";
@@ -49,7 +46,6 @@ export interface ResolvedThemeSettings {
   showCostSummary: boolean;
   showCostSummaryFloatingButton: boolean;
   showOverviewRatings: boolean;
-  overviewRatingStyle: OverviewRatingStyle;
   showTrafficRating: boolean;
   showBandwidthRating: boolean;
   showAssetRating: boolean;
@@ -62,7 +58,7 @@ export interface ResolvedThemeSettings {
   showConnections: boolean;
   hiddenNodes: string[];
   costIgnoredNodes: string[];
-  costPremiums: Record<string, number>;
+  costPremiums: Record<string, CostPremiumEntry>;
   costRateApiUrl: string;
   enableBackgroundImage: boolean;
   backgroundImage: string;
@@ -90,7 +86,6 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   showCostSummary: true,
   showCostSummaryFloatingButton: true,
   showOverviewRatings: true,
-  overviewRatingStyle: "plain",
   showTrafficRating: true,
   showBandwidthRating: true,
   showAssetRating: true,
@@ -194,9 +189,6 @@ export function normalizeThemeSettings(
     showCostSummary: enabledUnlessFalse(settings?.showCostSummary),
     showCostSummaryFloatingButton: enabledUnlessFalse(settings?.showCostSummaryFloatingButton),
     showOverviewRatings: enabledUnlessFalse(settings?.showOverviewRatings),
-    overviewRatingStyle: isOverviewRatingStyle(settings?.overviewRatingStyle)
-      ? settings.overviewRatingStyle
-      : DEFAULT_THEME_SETTINGS.overviewRatingStyle,
     showTrafficRating: enabledUnlessFalse(settings?.showTrafficRating),
     showBandwidthRating: enabledUnlessFalse(settings?.showBandwidthRating),
     showAssetRating: enabledUnlessFalse(settings?.showAssetRating),

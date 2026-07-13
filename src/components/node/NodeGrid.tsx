@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
 import { Flag } from "@/components/ui/Flag";
 import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useHomeNodeSummaries } from "@/hooks/useNode";
 import { useHomepagePingOverview } from "@/hooks/usePingOverview";
+import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { useViewMode } from "@/hooks/useViewMode";
 import {
@@ -27,19 +29,20 @@ import {
 import { getDisplayRegionCode } from "@/utils/geo";
 import { useHomeSort } from "@/hooks/useHomeSort";
 import { useHomeNodeOrder } from "@/hooks/useHomeNodeOrder";
+import { preloadAssetsPage } from "@/services/assetsPageLoader";
 import { HomeSortControl } from "./HomeSortControl";
 import {
   getOverviewRating,
   type OverviewRating,
-  type OverviewRatingStyle,
 } from "@/utils/overviewRating";
 import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
-import { CostSummary } from "./CostSummary";
 import { MiniNodeCard } from "./MiniNodeCard";
 import { NodeCard } from "./NodeCard";
 import { NodeListView } from "./NodeListView";
+import { RenewalReminder } from "./RenewalReminder";
 import type { NodeViewMode } from "@/utils/themeSettings";
+import type { NodeInfo } from "@/types/komari";
 
 // 每档视图各自的网格密度(gap/最小列宽)。迷你档改由 .node-grid-mini 固定列数,minColumnWidth 不用。
 const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
@@ -53,6 +56,11 @@ const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: num
 // 把多个 uuid 拼成单个签名串作为 memo key。逗号安全:uuid 是标准 UUID
 // ([0-9a-f-]),永远不含逗号。
 const UUID_KEY_SEPARATOR = ",";
+
+type IdleCapableWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 interface HomeOverview {
   totalNodes: number;
@@ -69,12 +77,24 @@ function formatCompactBytes(value: number): string {
   return `${amount}${unit[0]}`;
 }
 
+// 首页只保留站点身份。铭牌由 CSS 放进 AppShell 已有的顶部留白，不参与概览卡内容流，
+// 因此不会再把第一排 KPI 向下推；节点/在线/地区等重复信息由概览卡和地区栏承担。
+function HomeBrand({ siteName }: { siteName: string }) {
+  return (
+    <header className="home-brand" aria-label="站点名称">
+      <h1 className="home-brand-title" title={siteName}>
+        {siteName}
+      </h1>
+    </header>
+  );
+}
+
 function HomeOverviewCards({
+  siteName,
   overview,
   costSummary,
   costLoading,
   showOverviewRatings,
-  overviewRatingStyle,
   showTrafficRating,
   showBandwidthRating,
   showAssetRating,
@@ -82,15 +102,15 @@ function HomeOverviewCards({
   bandwidthRatingLabels,
   assetRatingLabels,
   showDetailButton,
-  onOpenCostSummary,
+  renewalNodes,
   dense,
 }: {
+  siteName: string;
   overview: HomeOverview;
   costSummary: { remainingCny: number } | null;
   costLoading: boolean;
   dense: boolean;
   showOverviewRatings: boolean;
-  overviewRatingStyle: OverviewRatingStyle;
   showTrafficRating: boolean;
   showBandwidthRating: boolean;
   showAssetRating: boolean;
@@ -98,7 +118,7 @@ function HomeOverviewCards({
   bandwidthRatingLabels: string;
   assetRatingLabels: string;
   showDetailButton: boolean;
-  onOpenCostSummary: () => void;
+  renewalNodes: NodeInfo[];
 }) {
   const [trafficValue, trafficUnit] = formatBytes(
     overview.trafficUp + overview.trafficDown,
@@ -122,7 +142,6 @@ function HomeOverviewCards({
       ? getOverviewRating({
           kind: "traffic",
           value: overview.trafficUp + overview.trafficDown,
-          style: overviewRatingStyle,
           customLabels: trafficRatingLabels,
         })
       : null;
@@ -131,7 +150,6 @@ function HomeOverviewCards({
       ? getOverviewRating({
           kind: "bandwidth",
           value: overview.netUp + overview.netDown,
-          style: overviewRatingStyle,
           customLabels: bandwidthRatingLabels,
         })
       : null;
@@ -140,7 +158,6 @@ function HomeOverviewCards({
       ? getOverviewRating({
           kind: "asset",
           value: costSummary.remainingCny,
-          style: overviewRatingStyle,
           customLabels: assetRatingLabels,
         })
       : null;
@@ -154,8 +171,10 @@ function HomeOverviewCards({
 
   return (
     <section className={`home-overview${dense ? " is-dense" : ""}`} aria-label="首页总览">
-      <article className="overview-card">
-        <span className="overview-card-label">在线节点</span>
+      <article className="overview-card" data-metric="online">
+        <h1 className="overview-card-label overview-card-site-name" title={siteName}>
+          {siteName}
+        </h1>
         <div className="overview-card-main">
           <p className="overview-card-value">
             {overview.onlineNodes}
@@ -184,7 +203,7 @@ function HomeOverviewCards({
         )}
       </article>
 
-      <article className="overview-card">
+      <article className="overview-card" data-metric="traffic">
         <span className="overview-card-label">累计流量</span>
         <div className="overview-card-main">
           <p className="overview-card-value">
@@ -201,7 +220,7 @@ function HomeOverviewCards({
         </div>
       </article>
 
-      <article className="overview-card">
+      <article className="overview-card" data-metric="bandwidth">
         <span className="overview-card-label">实时带宽</span>
         <div className="overview-card-main">
           <p className="overview-card-value" style={{ color: speedRateColor(rate.unit) }}>
@@ -218,20 +237,10 @@ function HomeOverviewCards({
         </div>
       </article>
 
-      <article className="overview-card">
+      <article className="overview-card" data-metric="asset">
         <div className="overview-card-head">
           <span className="overview-card-label">资产概览</span>
-          {showDetailButton && (
-            <button
-              type="button"
-              className="overview-card-action"
-              onClick={onOpenCostSummary}
-              aria-label="打开资产统计详情"
-              title="资产统计"
-            >
-              <CircleDollarSign size={15} />
-            </button>
-          )}
+          {showDetailButton && <RenewalReminder nodes={renewalNodes} />}
         </div>
         <div className="overview-card-main">
           <p className="overview-card-value">{remainingValue}</p>
@@ -323,6 +332,8 @@ export function NodeGrid() {
   const nodes = useHomeNodeSummaries();
   const allMeta = useAllNodeMeta();
   const { data: me } = useAuth();
+  const { data: publicConfig } = usePublicConfig();
+  const siteName = publicConfig?.sitename?.trim() || "节点概览";
   const themeSettings = useThemeSettings();
   const { mode } = useViewMode();
   const sort = useHomeSort();
@@ -332,7 +343,6 @@ export function NodeGrid() {
   const sortDirection = sortEnabled ? sort.direction : themeSettings.homeSortDirection;
   const [selectedGroup, setSelectedGroup] = useState(HOME_ALL_GROUP);
   const [selectedRegion, setSelectedRegion] = useState(HOME_ALL_REGION);
-  const [costSummaryOpen, setCostSummaryOpen] = useState(false);
   useHomepagePingOverview();
 
   // 主题级「隐藏节点」:按名称/UUID 命中的节点彻底移除。名称匹配需要完整 meta(摘要无 name),
@@ -395,9 +405,8 @@ export function NodeGrid() {
   const showHomeOverview = themeSettings.isReady && themeSettings.showHomeOverview;
   const hasNodes = visibleMeta.length > 0;
   // 资产概览卡片(剩余价值)始终显示,这样切换花费相关设置不会让整行重排。
-  // showCostSummary 控制卡片右上角的详情按钮;悬浮球是兜底入口,只在详情按钮
-  // 不显示时出现(总览隐藏或其开关关闭),所以两个入口不会同时出现(都开时卡内
-  // 详情按钮优先)。
+  // showCostSummary 控制卡片右上角的资产页入口;悬浮球是兜底入口,只在卡内入口
+  // 不显示时出现(总览隐藏或其开关关闭),两个入口不会同时出现。
   const showAssetCard = showHomeOverview && hasNodes;
   const showCostDetailButton =
     showAssetCard && themeSettings.isReady && themeSettings.showCostSummary;
@@ -406,9 +415,24 @@ export function NodeGrid() {
     themeSettings.showCostSummaryFloatingButton &&
     hasNodes &&
     !showCostDetailButton;
-  // 只要有东西用到花费就计算:常驻的资产卡片,或悬浮球/面板。面板只在能被打开时才挂载。
+
+  useEffect(() => {
+    if (!showCostDetailButton && !showCostFloatingButton) return;
+
+    const idleWindow = window as IdleCapableWindow;
+    if (idleWindow.requestIdleCallback) {
+      const handle = idleWindow.requestIdleCallback(preloadAssetsPage, { timeout: 2_000 });
+      return () => idleWindow.cancelIdleCallback?.(handle);
+    }
+
+    // Safari 等无 requestIdleCallback 的浏览器，在首页稳定后再低优先级预取。
+    const handle = window.setTimeout(preloadAssetsPage, 1_000);
+    return () => window.clearTimeout(handle);
+  }, [showCostDetailButton, showCostFloatingButton]);
+
+  // 资产卡或悬浮球在场都预热汇率查询:资产卡自身要显示剩余价值,悬浮球场景则让
+  // 价格排序与 /assets 页(同一 query key)有现成数据。
   const costNeeded = showAssetCard || showCostFloatingButton;
-  const shouldRenderCostSummary = showCostDetailButton || showCostFloatingButton;
   const rateQuery = useQuery({
     queryKey: ["cost-rates", themeSettings.costRateApiUrl],
     queryFn: () => getExchangeRates(themeSettings.costRateApiUrl),
@@ -440,9 +464,6 @@ export function NodeGrid() {
     return map;
   }, [costSummary]);
   const costLoading = costNeeded && rateQuery.isLoading;
-  useEffect(() => {
-    if (!shouldRenderCostSummary && costSummaryOpen) setCostSummaryOpen(false);
-  }, [shouldRenderCostSummary, costSummaryOpen]);
   const groupOptions = useMemo(
     () =>
       sortHomeGroupOptions(
@@ -566,32 +587,38 @@ export function NodeGrid() {
     );
   }
 
-  // 成本浮窗 + 首页概览卡在「空节点」与正常两个分支里完全一致，提取一次复用。
+  // 资产页悬浮入口 + 首页概览卡在「空节点」与正常两个分支里完全一致，提取一次复用。
   const homeHeader = (
     <>
-      {shouldRenderCostSummary && (
-        <CostSummary
-          open={costSummaryOpen}
-          onOpenChange={setCostSummaryOpen}
-          showLauncher={showCostFloatingButton}
-        />
+      {showCostFloatingButton && (
+        <Link
+          to="/assets"
+          className="cost-summary-ball show"
+          aria-label="打开资产统计页"
+          title="资产统计"
+        >
+          <span className="cost-summary-ball-icon" aria-hidden>
+            <CircleDollarSign size={16} />
+          </span>
+        </Link>
       )}
+      {!showHomeOverview && <HomeBrand siteName={siteName} />}
       {showHomeOverview && (
         <HomeOverviewCards
+          siteName={siteName}
           overview={overview}
           dense={mode === "mini" || mode === "list"}
           showDetailButton={showCostDetailButton}
+          renewalNodes={visibleMeta}
           costSummary={costSummary}
           costLoading={costLoading}
           showOverviewRatings={themeSettings.showOverviewRatings}
-          overviewRatingStyle={themeSettings.overviewRatingStyle}
           showTrafficRating={themeSettings.showTrafficRating}
           showBandwidthRating={themeSettings.showBandwidthRating}
           showAssetRating={themeSettings.showAssetRating}
           trafficRatingLabels={themeSettings.trafficRatingLabels}
           bandwidthRatingLabels={themeSettings.bandwidthRatingLabels}
           assetRatingLabels={themeSettings.assetRatingLabels}
-          onOpenCostSummary={() => setCostSummaryOpen(true)}
         />
       )}
     </>

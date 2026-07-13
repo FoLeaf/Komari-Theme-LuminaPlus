@@ -3,7 +3,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useVisibleNodeUuids } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { getPingOverview } from "@/services/api";
-import type { PingOverviewBucket, PingOverviewItem } from "@/types/komari";
+import type {
+  PingOverviewBucket,
+  PingOverviewItem,
+  PingTaskStats,
+} from "@/types/komari";
 import { signalWithTimeout } from "@/utils/abort";
 import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
 import {
@@ -69,13 +73,20 @@ function stringifyBindings(bindings: HomepagePingTaskBindings) {
 }
 
 function equalSamples(
-  a: Array<{ time: number; value: number }>,
-  b: Array<{ time: number; value: number }>,
+  a: PingOverviewItem["samples"],
+  b: PingOverviewItem["samples"],
 ) {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i]?.time !== b[i]?.time || a[i]?.value !== b[i]?.value) return false;
+    if (
+      a[i]?.time !== b[i]?.time ||
+      a[i]?.value !== b[i]?.value ||
+      a[i]?.count !== b[i]?.count ||
+      a[i]?.loss !== b[i]?.loss
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -96,6 +107,7 @@ function equalPingItem(a: PingOverviewItem | undefined, b: PingOverviewItem | un
 function buildPingOverviewItems(
   taskId: number,
   records: Array<{ task_id: number; time: string | number; value: number; client: string }>,
+  metricStats: PingTaskStats[] = [],
 ) {
   const selectedRecords = records.filter((record) => record.task_id === taskId);
   const grouped = new Map<string, Array<(typeof selectedRecords)[number]>>();
@@ -117,12 +129,20 @@ function buildPingOverviewItems(
   }
 
   const result = new Map<string, PingOverviewItem>();
-  for (const [client, clientRecords] of grouped) {
+  const statsByClient = new Map(
+    metricStats
+      .filter((stat) => stat.taskId === taskId)
+      .map((stat) => [stat.client, stat] as const),
+  );
+  const clients = new Set([...grouped.keys(), ...statsByClient.keys()]);
+
+  for (const client of clients) {
+    const clientRecords = grouped.get(client) ?? [];
     const sorted = [...clientRecords].sort(
       (left, right) => toTimestamp(left.time) - toTimestamp(right.time),
     );
     const latestRecord = sorted[sorted.length - 1];
-    const samples: Array<{ time: number; value: number }> = [];
+    const samples: PingOverviewItem["samples"] = [];
     let max = 1;
 
     for (let i = 0; i < sorted.length; i++) {
@@ -130,7 +150,12 @@ function buildPingOverviewItems(
       const value = record.value;
       const time = toTimestamp(record.time);
       if (time > 0) {
-        samples.push({ time, value });
+        samples.push({
+          time,
+          value,
+          count: "count" in record && typeof record.count === "number" ? record.count : undefined,
+          loss: "loss" in record && typeof record.loss === "number" ? record.loss : undefined,
+        });
       }
       if (value > max) {
         max = value;
@@ -138,13 +163,18 @@ function buildPingOverviewItems(
     }
 
     const lossStats = lossStatsByClient.get(client);
+    const serverStats = statsByClient.get(client);
     result.set(client, {
       client,
       isAssigned: true,
-      lastValue: latestRecord && latestRecord.value >= 0 ? latestRecord.value : null,
+      lastValue:
+        serverStats?.latest ??
+        (latestRecord && latestRecord.value >= 0 ? latestRecord.value : null),
       samples,
-      max,
-      loss: lossStats?.total ? (lossStats.lost / lossStats.total) * 100 : null,
+      max: serverStats?.max ?? max,
+      loss:
+        serverStats?.loss ??
+        (lossStats?.total ? (lossStats.lost / lossStats.total) * 100 : null),
     });
   }
 
@@ -211,9 +241,15 @@ async function buildOverviewMap(
   const overviewResults = await Promise.allSettled(
     selectedTaskIds.map(async (taskId) => {
       const requestSignal = signalWithTimeout(signal, PING_REQUEST_TIMEOUT_MS);
+      const entityIds = normalizedUuids.filter(
+        (uuid) => selectedTaskByClient.get(uuid) === taskId,
+      );
       return {
         taskId,
-        overview: await getPingOverview(hours, taskId, { signal: requestSignal }),
+        overview: await getPingOverview(hours, taskId, {
+          signal: requestSignal,
+          entityIds,
+        }),
       };
     }),
   );
@@ -228,9 +264,9 @@ async function buildOverviewMap(
 
     const {
       taskId,
-      overview: { records, tasks },
+      overview: { records, tasks, stats },
     } = result.value;
-    itemsByTask.set(taskId, buildPingOverviewItems(taskId, records));
+    itemsByTask.set(taskId, buildPingOverviewItems(taskId, records, stats));
 
     const taskInterval = tasks.find((task) => task.id === taskId)?.interval;
     refreshIntervals.push(normalizeRefreshInterval(taskInterval));
@@ -540,13 +576,21 @@ export function usePingBuckets(
       if (bucketIndex < 0) continue;
       if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
 
-      totals[bucketIndex] += 1;
-      // value>=0 为成功（含 0=亚毫秒）计入均值；只有 value<0（-1）才计为丢包。
-      if (sample.value >= 0) {
-        positiveSums[bucketIndex] += sample.value;
-        positiveCounts[bucketIndex] += 1;
-      } else {
-        losts[bucketIndex] += 1;
+      const sampleCount = Math.max(1, Math.round(sample.count ?? 1));
+      const sampleLost = sample.loss != null
+        ? Math.min(sampleCount, Math.max(0, Math.round((sample.loss / 100) * sampleCount)))
+        : sample.value < 0
+          ? sampleCount
+          : 0;
+      const sampleValid = sampleCount - sampleLost;
+
+      totals[bucketIndex] += sampleCount;
+      losts[bucketIndex] += sampleLost;
+      // 聚合点的 value 已由 metric 适配层恢复为“成功样本均值”，这里按 valid count
+      // 加权；旧接口/模拟数据没有 count，仍等价于单样本累加。
+      if (sample.value >= 0 && sampleValid > 0) {
+        positiveSums[bucketIndex] += sample.value * sampleValid;
+        positiveCounts[bucketIndex] += sampleValid;
       }
     }
 
@@ -554,7 +598,7 @@ export function usePingBuckets(
       const startAt = windowStart + index * bucketMs;
       const endAt = startAt + bucketMs;
       const total = totals[index];
-      const lost = losts[index];
+      const lost = Math.round(losts[index]);
       const positiveCount = positiveCounts[index];
 
       return {

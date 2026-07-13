@@ -217,15 +217,15 @@ body::after {
 /* 悬浮控制卡里的"卡片配色"取色面板 */
 .metric-color-picker {
   align-self: flex-end;
-  width: 220px;
+  width: 244px;
   max-width: calc(100vw - 2rem);
   /* 项目较多时面板可滚动，不超出视口 */
   max-height: min(70vh, 560px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 14px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--surface-elev);
@@ -237,22 +237,37 @@ body::after {
 .metric-color-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
+/* 分组标题:eyebrow 小标 + 两侧发丝线,与主题其余分区排版一致。 */
 .metric-color-group-title {
-  font-size: 11px;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.metric-color-group-title::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--hairline) 120%, transparent);
 }
 
 .metric-color-picker-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 110%, transparent);
   color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
 .metric-color-error {
@@ -263,28 +278,37 @@ body::after {
 .metric-color-reset-all {
   cursor: pointer;
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  transition: color 160ms ease;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--accent-500);
+  transition: color 160ms ease, opacity 160ms ease;
 }
 .metric-color-reset-all:hover:not(:disabled) {
-  color: var(--text-primary);
+  opacity: 0.72;
 }
 .metric-color-reset-all:disabled {
-  opacity: 0.4;
+  opacity: 0.32;
+  color: var(--text-tertiary);
   cursor: default;
 }
 
 .metric-color-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 .metric-color-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  border-radius: 9px;
+  padding: 5px 6px;
+  transition: background 140ms ease;
+}
+
+.metric-color-row:hover {
+  background: var(--hover-bg);
 }
 
 .metric-color-icon {
@@ -294,19 +318,28 @@ body::after {
 
 .metric-color-name {
   flex: 1 1 auto;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 560;
   color: var(--text-secondary);
 }
 
 .metric-color-swatch {
   position: relative;
   flex: none;
-  width: 30px;
-  height: 22px;
-  border-radius: 7px;
-  border: 1px solid var(--border-strong);
+  width: 38px;
+  height: 24px;
+  border-radius: 8px;
+  /* 双圈:内层白/黑发丝 + 外层描边,让浅色块在浅背景上也有边界。 */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, white 40%, transparent),
+    inset 0 0 0 2px color-mix(in srgb, var(--text-primary) 12%, transparent);
   overflow: hidden;
   cursor: pointer;
+  transition: transform 140ms ease;
+}
+
+.metric-color-swatch:hover {
+  transform: scale(1.06);
 }
 
 /* 原生取色器铺满色块并透明，色块本身的 background 显示当前色 */
@@ -328,15 +361,15 @@ body::after {
   justify-content: center;
   flex: none;
   width: 24px;
-  height: 22px;
+  height: 24px;
   border-radius: 7px;
   cursor: pointer;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   transition: color 160ms ease, background 160ms ease;
 }
 .metric-color-reset:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--hover-bg);
+  background: color-mix(in srgb, var(--hover-bg) 60%, transparent);
 }
 /* 没改过这一项就没东西可重置：隐藏按钮（仍占位避免错位），消除暗黑下看不清的幽灵图标 */
 .metric-color-reset:disabled {
@@ -348,6 +381,102 @@ body::after {
     top: max(1.25rem, env(safe-area-inset-top));
     right: max(1.25rem, env(safe-area-inset-right));
   }
+}
+
+/* 主题管理报头:eyebrow + 大标题 + 右侧账目式元信息,和资产页同一套编辑排版语言。 */
+.theme-masthead {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 20px;
+  background:
+    linear-gradient(
+      130deg,
+      color-mix(in srgb, var(--accent-500) 5%, transparent) 0%,
+      transparent 44%
+    ),
+    var(--surface-a);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px 22px;
+}
+
+.theme-masthead-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.theme-masthead-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 40px;
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 90%, transparent);
+  padding-top: 18px;
+}
+
+.theme-masthead-headings {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-masthead-kicker {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+}
+
+.theme-masthead-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(26px, 3.4vw, 34px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.theme-masthead-desc {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.theme-masthead-meta {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 26px;
+  margin: 0;
+}
+
+.theme-masthead-meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.theme-masthead-meta dt {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 680;
+  letter-spacing: 0.14em;
+}
+
+.theme-masthead-meta dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 740;
+  font-variant-numeric: tabular-nums;
 }
 
 .theme-manage-toolbar-actions {
@@ -415,25 +544,26 @@ body::after {
 
 .theme-manage-button.is-primary {
   color: var(--text-on-strong);
-  border-color: color-mix(in srgb, var(--progress-cpu) 58%, black 42%);
+  border-color: color-mix(in srgb, var(--accent-strong) 70%, black 30%);
+  /* azure(--accent-500)顶 → indigo(--accent-strong)底,给主按钮一点体积感而非平涂。 */
   background:
     linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--progress-cpu) 88%, white 12%) 0%,
-      color-mix(in srgb, var(--progress-memory) 42%, var(--progress-cpu) 58%) 100%
+      180deg,
+      color-mix(in srgb, var(--accent-500) 94%, white 6%) 0%,
+      var(--accent-strong) 100%
     );
   box-shadow:
-    0 18px 34px -24px color-mix(in srgb, var(--progress-cpu) 44%, black 56%),
-    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+    0 18px 34px -24px color-mix(in srgb, var(--accent-strong) 54%, black 46%),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .theme-manage-button.is-primary:hover {
-  border-color: color-mix(in srgb, var(--progress-cpu) 72%, white 28%);
+  border-color: color-mix(in srgb, var(--accent-500) 76%, white 24%);
   background:
     linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--progress-cpu) 82%, white 18%) 0%,
-      color-mix(in srgb, var(--progress-memory) 48%, var(--progress-cpu) 52%) 100%
+      180deg,
+      color-mix(in srgb, var(--accent-500) 100%, white 8%) 0%,
+      color-mix(in srgb, var(--accent-strong) 92%, white 8%) 100%
     );
 }
 
@@ -549,6 +679,32 @@ body::after {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+/* 编号分区小标(仅主题管理传入 kicker 时出现):两位序号用品牌色 + 分区名。 */
+.instance-panel-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.instance-panel-kicker-num {
+  color: var(--accent-500);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 带 kicker 的面板(主题管理各分区)标题区加一道发丝下线,读作报告的分节。 */
+.instance-panel.has-kicker .instance-panel-header {
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 82%, transparent);
+  padding-bottom: 12px;
 }
 
 /* 标题 + 紧随其后的内联控件（如服务器切换器）同一行居中对齐 */

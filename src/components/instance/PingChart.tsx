@@ -22,6 +22,8 @@ import {
   smoothByCount,
 } from "./chartData";
 import { latencyHeatColor, lossHeatColor } from "@/utils/metricTone";
+import { historyChartRangeSeconds, historyCoverageLabel } from "@/utils/historyRange";
+import { resolvePingChartInterval } from "@/utils/pingMetrics";
 import { usePreferences } from "@/hooks/usePreferences";
 import type { PingRecord } from "@/types/komari";
 import type { TimedMetricPoint } from "./chartData";
@@ -134,9 +136,15 @@ export function PingChart({
     const taskIntervals = tasks
       .map((task) => task.interval)
       .filter((value): value is number => typeof value === "number" && value > 0);
-    const fallbackInterval = taskIntervals.length > 0
-      ? Math.min(...taskIntervals)
-      : detectTypicalIntervalSeconds(sortedRecords.map(({ time }) => time), 60);
+    const detectedInterval = detectTypicalIntervalSeconds(
+      sortedRecords.map(({ time }) => time),
+      60,
+    );
+    const fallbackInterval = resolvePingChartInterval(
+      data.intervalSeconds,
+      taskIntervals.length > 0 ? Math.min(...taskIntervals) : null,
+      detectedInterval,
+    );
     const tolerance = Math.min(6, Math.max(0.8, fallbackInterval * 0.25));
 
     // records 已按时间排序，且 anchor 之间间距总是大于 `tolerance` (只有当现有 anchor 都不
@@ -159,9 +167,10 @@ export function PingChart({
     }
     chartPoints = insertMetricGapSentinels(chartPoints, {
       intervals: new Map(
-        tasks
-          .filter((task) => typeof task.interval === "number" && task.interval > 0)
-          .map((task) => [String(task.id), task.interval] as const),
+        tasks.map((task) => [
+          String(task.id),
+          resolvePingChartInterval(data.intervalSeconds, task.interval, fallbackInterval),
+        ] as const),
       ),
       defaultInterval: fallbackInterval,
       matchToleranceRatio: 0.25,
@@ -187,6 +196,26 @@ export function PingChart({
   useEffect(() => {
     if (chart) chartRef.current = chart;
   }, [chart]);
+
+  const requestedXRange = useMemo(() => historyChartRangeSeconds(data), [data]);
+  const coverageMeta = useMemo(() => {
+    if (!data) return null;
+    const taskIntervals = tasks
+      .map((task) => task.interval)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    return {
+      rangeStartMs: data.rangeStartMs,
+      rangeEndMs: data.rangeEndMs,
+      intervalSeconds:
+        data.intervalSeconds ??
+        (taskIntervals.length > 0 ? Math.min(...taskIntervals) : undefined),
+    };
+  }, [data, tasks]);
+  const coverageLabel = useMemo(() => {
+    const times = chart?.[0];
+    if (!times?.length) return null;
+    return historyCoverageLabel(coverageMeta, times[0], times[times.length - 1]);
+  }, [chart, coverageMeta]);
 
   const yRange = useMemo<[number | null, number | null]>(() => {
     if (!chart) return [null, null];
@@ -253,7 +282,9 @@ export function PingChart({
       cursor: { drag: { x: true, y: false } },
       legend: { show: false },
       scales: {
-        x: { time: true },
+        x: requestedXRange
+          ? { time: true, auto: false, range: () => requestedXRange }
+          : { time: true },
         y: { auto: false, range: yRange },
       },
       axes: [
@@ -288,7 +319,7 @@ export function PingChart({
         setCursor: [tooltipHooks.onSetCursor],
       },
     };
-  }, [chart, connectNulls, hiddenTasks, hours, isDark, taskColors, taskIndexById, taskLabels, tasks, visibleTasks, yRange]);
+  }, [chart, connectNulls, hiddenTasks, hours, isDark, requestedXRange, taskColors, taskIndexById, taskLabels, tasks, visibleTasks, yRange]);
 
   const options = useMemo<uPlot.Options | null>(
     () => (baseOptions ? { ...baseOptions, width: w, height: h } : null),
@@ -307,26 +338,39 @@ export function PingChart({
       records.sort((a, b) => toChartSeconds(a.time) - toChartSeconds(b.time));
     }
 
+    const serverStats = new Map(
+      (data?.stats ?? [])
+        .filter((stat) => !stat.client || stat.client === uuid)
+        .map((stat) => [stat.taskId, stat] as const),
+    );
+
     return tasks.map((task, index) => {
       const records = grouped.get(task.id) ?? [];
+      const server = serverStats.get(task.id);
       // 有效样本含 0（0 = 往返 <1ms 被取整）；只有 value<0（-1）才是丢包，统计里排除。
       const valid = records
         .filter((record) => record.value >= 0)
         .map((record) => record.value)
         .sort((a, b) => a - b);
-      const latest = [...records].reverse().find((record) => record.value >= 0)?.value ?? null;
-      const avg = valid.length
-        ? valid.reduce((sum, value) => sum + value, 0) / valid.length
-        : null;
-      const min = valid.length ? valid[0] : null;
-      const max = valid.length ? valid[valid.length - 1] : null;
-      const p50 = percentileFromSorted(valid, 0.5);
-      const p99 = percentileFromSorted(valid, 0.99);
+      const latest = server
+        ? server.latest
+        : [...records].reverse().find((record) => record.value >= 0)?.value ?? null;
+      const avg = server
+        ? server.avg
+        : valid.length
+          ? valid.reduce((sum, value) => sum + value, 0) / valid.length
+          : null;
+      const min = server ? server.min : valid.length ? valid[0] : null;
+      const max = server ? server.max : valid.length ? valid[valid.length - 1] : null;
+      const p50 = server ? server.p50 : percentileFromSorted(valid, 0.5);
+      const p99 = server ? server.p99 : percentileFromSorted(valid, 0.99);
       // p50 现在可能为 0（亚毫秒任务），`p50 &&` 守卫仍需保留：避免 p99/0 得到 Infinity。
       const volatility = p50 && p99 ? p99 / p50 : null;
-      const total = records.length;
-      const lost = records.filter((record) => record.value < 0).length;
-      const loss = total > 0 ? (lost / total) * 100 : task.loss;
+      const total = server?.total ?? records.length;
+      const lost = server
+        ? Math.max(0, server.total - server.valid)
+        : records.filter((record) => record.value < 0).length;
+      const loss = server?.loss ?? (total > 0 ? (lost / total) * 100 : task.loss);
       return {
         ...task,
         latest,
@@ -342,7 +386,7 @@ export function PingChart({
         color: taskColors.get(task.id) ?? colorForSeries(index, tasks.length),
       };
     });
-  }, [data, taskColors, tasks]);
+  }, [data, taskColors, tasks, uuid]);
 
   const toggleTask = (taskId: number) => {
     setHiddenTasks((prev) => {
@@ -370,7 +414,7 @@ export function PingChart({
   }
 
   return (
-    <InstancePanel title="Ping 图表">
+    <InstancePanel title="Ping 图表" description={coverageLabel ?? undefined}>
       <div className="instance-ping-toolbar">
         <SwitchToggle
           label="削峰平滑"

@@ -56,6 +56,9 @@
   --status-info: #3b82f6;
   /* 品牌强调色,Spinner 转动弧、ThemeManage 复选框等引用。 */
   --accent-500: #3b82f6;
+  /* 品牌深调:比 --accent-500 更沉、微偏靛,只用于主 CTA / 报头 / 激活态渐变的暗端,
+     让品牌蓝有「azure→indigo」的体积感而非一块平涂色。数据色(--progress-cpu 等)不受影响。 */
+  --accent-strong: #2f5be0;
   /* 速率热力四档(现实可见区间):B/s 超低速绿 → KB/s 低速琥珀 → MB/s 高速橙 → GB/s 及以上 急速红。 */
   --speed-idle: #3aa76a;
   --speed-low: #d9992b;
@@ -72,44 +75,51 @@
   --tag-gray-bg: #e5e5e5;
   --tag-gray-fg: #3f3f46;
 
-  --shadow-card:
-    0 0 0 1px rgba(24, 24, 27, 0.03),
-    0 1px 2px rgba(24, 24, 27, 0.04),
-    0 12px 32px -16px rgba(24, 24, 27, 0.12);
+  --shadow-card: none;
 
   --ring: rgba(59, 130, 246, 0.35);
+
+  /* 画布氛围层(只在纯色模式可见——透明模式的 body::before 图片会盖住 <html> 背景)。
+     顶部一道极淡的品牌冷光,给平铺画布一点「顶光」的纵深;亮色下几乎不可察,仅去掉死板。 */
+  --canvas-glow: radial-gradient(
+    1100px 560px at 50% -8%,
+    color-mix(in srgb, var(--accent-500) 5%, transparent) 0%,
+    transparent 60%
+  );
 }
 
 :root[data-appearance="dark"] {
-  --bg-0: #090909;
+  /* Dark Dimmed：采用成熟开发工具常见的蓝灰中性色阶。层级主要由表面色差与边框表达，
+     不再使用近黑画布、冷光、颗粒或普通卡片阴影。 */
+  --bg-0: #212830;
 
-  --surface: #0f0f10;
-  --surface-elev: #121214;
-  --surface-sunken: #0b0b0c;
+  --surface: #262c36;
+  --surface-elev: #2a313c;
+  --surface-sunken: #151b23;
 
-  --border: rgba(255, 255, 255, 0.055);
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-strong: rgba(255, 255, 255, 0.1);
-  --hairline: rgba(255, 255, 255, 0.06);
+  --border: #3d444d;
+  --border-subtle: rgba(61, 68, 77, 0.7);
+  --border-strong: #656c76;
+  --hairline: rgba(61, 68, 77, 0.7);
 
-  --text-primary: #dddddf;
-  --text-secondary: #a5a5aa;
-  --text-tertiary: #76767c;
-  --text-on-strong: #0f0f0f;
+  --text-primary: #d1d7e0;
+  --text-secondary: #b7bdc8;
+  --text-tertiary: #9198a1;
+  --text-on-strong: #151b23;
 
-  --fill-secondary: rgba(230, 230, 230, 0.075);
-  --fill-tertiary: rgba(230, 230, 230, 0.045);
+  --fill-secondary: rgba(101, 108, 118, 0.2);
+  --fill-tertiary: rgba(101, 108, 118, 0.12);
 
-  --hover-bg: #17171a;
+  --hover-bg: #2f3742;
 
-  --progress-bg: #26262a;
-  --progress-cpu: #5d88ff;
-  --progress-memory: #a35cf5;
-  --progress-swap: #818cf8;
-  --progress-disk: #f1873d;
-  --progress-network: #5bbb8a;
-  --progress-load: #f472b6;
-  /* 与 light 模式相同的 OKLCH heat 曲线(在 dark 的 #26262a 轨道上也清晰)。
+  --progress-bg: #343b45;
+  --progress-cpu: #539bf5;
+  --progress-memory: #b083f0;
+  --progress-swap: #986ee2;
+  --progress-disk: #e0823d;
+  --progress-network: #57ab5a;
+  --progress-load: #e275ad;
+  /* 与 light 模式相同的 OKLCH heat 曲线(在 dark 的 #343b45 轨道上也清晰)。
      与 trafficQuotaSegmentColor() 一致,详见上方说明。 */
   --traffic-heat-spectrum: linear-gradient(
     to right in oklch,
@@ -123,32 +133,33 @@
     oklch(0.6 0.22 27) 100%
   );
 
-  --status-success: #61c08f;
-  --status-warning: #d4a54a;
-  --status-error: #d84e45;
-  --status-info: #5d88ff;
-  --accent-500: #5d88ff;
-  --speed-idle: #61c08f;
-  --speed-low: #e0b34f;
-  --speed-high: #ef8f55;
-  --speed-max: #ec6a5e;
+  --status-success: #57ab5a;
+  --status-warning: #daaa3f;
+  --status-error: #f47067;
+  --status-info: #539bf5;
+  --accent-500: #539bf5;
+  --accent-strong: #4184e4;
+  --speed-idle: #57ab5a;
+  --speed-low: #daaa3f;
+  --speed-high: #e0823d;
+  --speed-max: #f47067;
   /* 流量上/下行方向色（图标、出站/入站箭头） */
-  --traffic-up: #5d88ff;
-  --traffic-down: #61c08f;
-  --status-online: #61c08f;
-  --status-offline: #d84e45;
+  --traffic-up: #539bf5;
+  --traffic-down: #57ab5a;
+  --status-online: #57ab5a;
+  --status-offline: #f47067;
 
-  --tag-red-bg: #9e3426;
-  --tag-red-fg: #ececee;
-  --tag-gray-bg: #26262a;
-  --tag-gray-fg: #dedee1;
+  --tag-red-bg: rgba(244, 112, 103, 0.16);
+  --tag-red-fg: #ffb8b0;
+  --tag-gray-bg: rgba(145, 152, 161, 0.18);
+  --tag-gray-fg: #d1d7e0;
 
-  --shadow-card:
-    0 0 0 1px rgba(255, 255, 255, 0.012),
-    0 1px 2px rgba(0, 0, 0, 0.05),
-    0 10px 20px -20px rgba(0, 0, 0, 0.35);
+  --shadow-card: none;
 
-  --ring: rgba(93, 136, 255, 0.46);
+  --ring: rgba(83, 155, 245, 0.5);
+
+  --canvas-glow: none;
+  --canvas-noise: none;
 }
 
 /* 标签配色 — DStatus 风格 pill,按标签颜色名取色 */

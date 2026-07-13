@@ -23,13 +23,18 @@ export function Instance() {
   const [pingHours, setPingHours] = useState(DEFAULT_PING_HOURS);
   const chartControlsRef = useRef<HTMLDivElement | null>(null);
 
+  const metricRetentionHours =
+    config?.metric_retention_days && config.metric_retention_days > 0
+      ? config.metric_retention_days * 24
+      : null;
+
   const loadRanges = useMemo(
-    () => buildLoadTimeRangeOptions(config?.record_preserve_time),
-    [config?.record_preserve_time],
+    () => buildLoadTimeRangeOptions(metricRetentionHours ?? config?.record_preserve_time),
+    [config?.record_preserve_time, metricRetentionHours],
   );
   const pingRanges = useMemo(
-    () => buildPingTimeRangeOptions(config?.ping_record_preserve_time),
-    [config?.ping_record_preserve_time],
+    () => buildPingTimeRangeOptions(metricRetentionHours ?? config?.ping_record_preserve_time),
+    [config?.ping_record_preserve_time, metricRetentionHours],
   );
   const showPingChart = themeSettings.isReady && themeSettings.showPingChart;
 

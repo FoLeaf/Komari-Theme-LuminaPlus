@@ -4,6 +4,7 @@ import { Spinner } from "@/components/ui/Spinner";
 
 export function InstancePanel({
   title,
+  kicker,
   titleAction,
   description,
   aside,
@@ -11,6 +12,8 @@ export function InstancePanel({
   className,
 }: {
   title: string;
+  /** 标题上方的编号/分区小标（如主题管理的 01·外观）。仅在传入时渲染。 */
+  kicker?: ReactNode;
   /** 紧贴标题文字之后的内联控件（如详情页的服务器切换器）。 */
   titleAction?: ReactNode;
   description?: ReactNode;
@@ -19,9 +22,10 @@ export function InstancePanel({
   className?: string;
 }) {
   return (
-    <section className={clsx("instance-panel", className)}>
+    <section className={clsx("instance-panel", kicker != null && "has-kicker", className)}>
       <header className="instance-panel-header">
         <div className="instance-panel-headings">
+          {kicker != null && <span className="instance-panel-kicker">{kicker}</span>}
           <div className="instance-panel-title-row">
             <h2 className="instance-panel-title">{title}</h2>
             {titleAction}

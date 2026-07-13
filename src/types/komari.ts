@@ -152,7 +152,6 @@ export interface ThemeSettings {
   showCostSummary?: boolean;
   showCostSummaryFloatingButton?: boolean;
   showOverviewRatings?: boolean;
-  overviewRatingStyle?: "plain" | "cultivation";
   showTrafficRating?: boolean;
   showBandwidthRating?: boolean;
   showAssetRating?: boolean;
@@ -165,7 +164,11 @@ export interface ThemeSettings {
   showConnections?: boolean;
   hiddenNodes?: string[];
   costIgnoredNodes?: string[];
-  costPremiums?: Record<string, number>;
+  // 值支持旧版纯数字(自动升格)或 { amount, paidCny?, acquiredAt? } 条目,见 normalizeCostPremiums。
+  costPremiums?: Record<
+    string,
+    number | { amount?: number; paidCny?: number; acquiredAt?: string }
+  >;
   costRateApiUrl?: string;
   enableBackgroundImage?: boolean;
   backgroundImage?: string;
@@ -186,6 +189,7 @@ export const PublicConfigSchema = z
     record_enabled: z.boolean().default(true),
     record_preserve_time: z.number().default(0),
     ping_record_preserve_time: z.number().default(0),
+    metric_retention_days: z.number().default(0),
     custom_head: z.string().default(""),
     custom_body: z.string().default(""),
     theme_settings: z.record(z.string(), z.unknown()).default({}),
@@ -203,6 +207,7 @@ export interface PublicConfig {
   record_enabled: boolean;
   record_preserve_time: number;
   ping_record_preserve_time: number;
+  metric_retention_days: number;
   custom_head: string;
   custom_body: string;
   theme_settings: ThemeSettings & Record<string, unknown>;
@@ -300,6 +305,10 @@ export interface PingRecord {
   time: string | number;
   value: number;
   client: string;
+  /** 聚合 metric 点覆盖的原始样本数；旧接口的原始记录没有此字段。 */
+  count?: number;
+  /** 聚合窗口的丢包百分比；旧接口由 value < 0 表示单次丢包。 */
+  loss?: number | null;
 }
 
 export const PingTaskSchema = z
@@ -329,19 +338,54 @@ export interface PingTask {
 export interface LoadRecordsResponse {
   count: number;
   records: LoadRecord[];
+  rangeStartMs?: number;
+  rangeEndMs?: number;
+  intervalSeconds?: number;
 }
 
 export interface PingRecordsResponse {
   count: number;
   records: PingRecord[];
   tasks: PingTask[];
+  /** 新 metric API 实际采用的聚合间隔，用于图表正确识别长区间连续点。 */
+  intervalSeconds?: number;
+  rangeStartMs?: number;
+  rangeEndMs?: number;
+  /** 新 metric API 返回的服务端区间统计；旧后端回退时不存在。 */
+  stats?: PingTaskStats[];
+}
+
+export interface PingTaskStats {
+  client: string;
+  taskId: number;
+  name: string;
+  type: string;
+  interval: number;
+  total: number;
+  valid: number;
+  loss: number;
+  min: number | null;
+  max: number | null;
+  avg: number | null;
+  latest: number | null;
+  p50: number | null;
+  p99: number | null;
+  stddev: number | null;
+  p99P50Ratio: number;
 }
 
 export interface PingOverviewItem {
   client: string;
   isAssigned: boolean;
   lastValue: number | null;
-  samples: Array<{ time: number; value: number }>;
+  samples: Array<{
+    time: number;
+    value: number;
+    /** 聚合 metric 点覆盖的原始样本数。 */
+    count?: number;
+    /** 聚合窗口的丢包百分比。 */
+    loss?: number | null;
+  }>;
   max: number;
   loss: number | null;
 }

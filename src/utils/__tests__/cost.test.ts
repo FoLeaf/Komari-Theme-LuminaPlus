@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  calculateCostPremiumAmount,
   calculateCostSummary,
   formatCnyMoney,
   isCostRateApiUrlValid,
@@ -34,6 +35,10 @@ function node(overrides: Record<string, unknown>): NodeInfo {
 
 function inDays(days: number) {
   return new Date(Date.now() + days * 86_400_000).toISOString();
+}
+
+function agoDays(days: number) {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
 describe("calculateCostSummary", () => {
@@ -123,7 +128,7 @@ describe("calculateCostSummary — acquisition premiums", () => {
       [node({ uuid: "paid", price: 10, expired_at: inDays(10) })],
       [],
       RATES,
-      { paid: 50 },
+      { paid: { amount: 50 } },
     );
     expect(summary.premiumTotalCny).toBe(50);
     expect(summary.details[0].premiumCny).toBe(50);
@@ -135,7 +140,7 @@ describe("calculateCostSummary — acquisition premiums", () => {
       [node({ uuid: "free", price: 0 })],
       [],
       RATES,
-      { free: -30 },
+      { free: { amount: -30 } },
     );
     expect(noteCount(summary, "免费")).toBe(1);
     expect(summary.premiumTotalCny).toBe(-30);
@@ -147,7 +152,7 @@ describe("calculateCostSummary — acquisition premiums", () => {
       [node({ uuid: "nx", price: 10, currency: "GBP" })],
       [],
       RATES,
-      { nx: 20 },
+      { nx: { amount: 20 } },
     );
     expect(noteCount(summary, "汇率缺失")).toBe(1);
     expect(summary.premiumTotalCny).toBe(20);
@@ -159,12 +164,93 @@ describe("calculateCostSummary — acquisition premiums", () => {
       [node({ uuid: "skip", name: "ignored-box", price: 10 })],
       ["ignored-box"],
       RATES,
-      { skip: 99 },
+      { skip: { amount: 99, acquiredAt: agoDays(60) } },
     );
     expect(noteCount(summary, "已忽略")).toBe(1);
     expect(summary.premiumTotalCny).toBe(0);
     expect(summary.details[0].premiumCny).toBe(0);
+    expect(summary.details[0].premiumMonthlyCny).toBe(0);
   });
+});
+
+describe("calculateCostSummary — premium amortization", () => {
+  it("amortizes premium over the acquired-to-expiry span so fresh entries are stable", () => {
+    // 300 天前收购、60 天后到期 → 摊销跨度 360 天 = 12 个月;溢价 120 → 月摊 10
+    const summary = calculateCostSummary(
+      [node({ uuid: "p", price: 10, currency: "USD", billing_cycle: 30, expired_at: inDays(60) })],
+      [],
+      RATES,
+      { p: { amount: 120, acquiredAt: agoDays(300) } },
+    );
+    const detail = summary.details[0];
+    expect(detail.amortMonths).toBeCloseTo(12, 3);
+    expect(detail.premiumMonthlyCny).toBeCloseTo(10, 3);
+    expect(summary.premiumMonthlyTotalCny).toBeCloseTo(10, 3);
+    expect(summary.effectiveMonthlyCny).toBeCloseTo(summary.monthlyCny + 10, 3);
+    expect(detail.premiumRemainingCny).toBeCloseTo(20, 2);
+    expect(summary.actualRemainingCny).toBeCloseTo(summary.remainingCny + 20, 2);
+  });
+
+  it("amortizes today's entry over the remaining span, not the elapsed holding", () => {
+    // 防回归:分母曾是「已持有月数」,刚录入时被钳到 1 → 月摊 = 全额溢价
+    const summary = calculateCostSummary(
+      [node({ uuid: "p", price: 10, expired_at: inDays(300) })],
+      [],
+      RATES,
+      { p: { amount: -100, acquiredAt: agoDays(0) } },
+    );
+    expect(summary.details[0].amortMonths).toBeCloseTo(10, 2);
+    expect(summary.details[0].premiumMonthlyCny).toBeCloseTo(-10, 2);
+  });
+
+  it("clamps spans under one month and falls back to elapsed holding without an expiry", () => {
+    const tiny = calculateCostSummary(
+      [node({ uuid: "p", price: 10, expired_at: inDays(10) })],
+      [],
+      RATES,
+      { p: { amount: 60, acquiredAt: agoDays(5) } },
+    );
+    expect(tiny.details[0].amortMonths).toBe(1);
+    expect(tiny.details[0].premiumMonthlyCny).toBe(60);
+
+    const noExpiry = calculateCostSummary(
+      [node({ uuid: "p", price: 10, expired_at: "" })],
+      [],
+      RATES,
+      { p: { amount: 30, acquiredAt: agoDays(90) } },
+    );
+    expect(noExpiry.details[0].amortMonths).toBeCloseTo(3, 3);
+    expect(noExpiry.details[0].premiumMonthlyCny).toBeCloseTo(10, 3);
+  });
+
+  it("degrades honestly without acquiredAt: no amortization, effective monthly equals monthly", () => {
+    const summary = calculateCostSummary(
+      [node({ uuid: "p", price: 10, currency: "USD", billing_cycle: 30, expired_at: inDays(30) })],
+      [],
+      RATES,
+      { p: { amount: 100 } },
+    );
+    expect(summary.details[0].amortMonths).toBeNull();
+    expect(summary.details[0].premiumMonthlyCny).toBe(0);
+    expect(summary.premiumMonthlyTotalCny).toBe(0);
+    expect(summary.effectiveMonthlyCny).toBeCloseTo(summary.monthlyCny, 6);
+    // 溢价总额不受影响:没有日期只是不摊销,不是不存在
+    expect(summary.premiumTotalCny).toBe(100);
+  });
+
+  it("drops the remaining premium to zero when a fixed-term node expires", () => {
+    const summary = calculateCostSummary(
+      [node({ uuid: "p", price: 10, currency: "USD", billing_cycle: 30, expired_at: inDays(-1) })],
+      [],
+      RATES,
+      { p: { amount: 500, paidCny: 1000, acquiredAt: agoDays(60) } },
+    );
+    expect(summary.remainingCny).toBe(0);
+    expect(summary.premiumRemainingTotalCny).toBe(0);
+    expect(summary.details[0].premiumRemainingCny).toBe(0);
+    expect(summary.actualRemainingCny).toBe(0);
+  });
+
 });
 
 describe("calculateCostSummary — annualized total & cycle validation", () => {
@@ -237,7 +323,7 @@ describe("cost helpers", () => {
     expect(normalizeCostIgnoredNodes(["x", "", " y "])).toEqual(["x", "y"]);
   });
 
-  it("normalizeCostPremiums keeps only non-zero finite numeric entries", () => {
+  it("normalizeCostPremiums upgrades legacy numbers and keeps only non-zero finite amounts", () => {
     expect(
       normalizeCostPremiums({
         paid: "12.5",
@@ -249,7 +335,50 @@ describe("cost helpers", () => {
         "   ": 7,
         "": 9,
       }),
-    ).toEqual({ paid: 12.5, discount: -3, spaced: 8 });
+    ).toEqual({
+      paid: { amount: 12.5 },
+      discount: { amount: -3 },
+      spaced: { amount: 8 },
+    });
+  });
+
+  it("normalizeCostPremiums keeps paid-price records, including zero-premium ones", () => {
+    expect(
+      normalizeCostPremiums({
+        fair: { amount: 0, paidCny: 100 },
+        full: { amount: 30, paidCny: 130.5, acquiredAt: "2026-06-01" },
+        badPaid: { amount: 10, paidCny: -5 },
+      }),
+    ).toEqual({
+      fair: { amount: 0, paidCny: 100 },
+      full: { amount: 30, paidCny: 130.5, acquiredAt: "2026-06-01" },
+      badPaid: { amount: 10 },
+    });
+  });
+
+  it("keeps the original premium basis when the paid price is edited later", () => {
+    expect(calculateCostPremiumAmount(130, 100)).toBe(30);
+    expect(
+      calculateCostPremiumAmount(140, 20, { amount: 30, paidCny: 130 }),
+    ).toBe(40);
+  });
+
+  it("normalizeCostPremiums keeps valid acquiredAt and drops unparseable dates without dropping the entry", () => {
+    expect(
+      normalizeCostPremiums({
+        dated: { amount: 50, acquiredAt: "2026-01-15" },
+        badDate: { amount: 20, acquiredAt: "not a date" },
+        spacedDate: { amount: 5, acquiredAt: "  2025-12-01  " },
+        futureDate: { amount: 8, acquiredAt: "2999-01-01" },
+        zeroWithDate: { amount: 0, acquiredAt: "2026-01-01" },
+        noAmount: { acquiredAt: "2026-01-01" },
+      }),
+    ).toEqual({
+      dated: { amount: 50, acquiredAt: "2026-01-15" },
+      badDate: { amount: 20 },
+      spacedDate: { amount: 5, acquiredAt: "2025-12-01" },
+      futureDate: { amount: 8 },
+    });
   });
 
   it("normalizeCostRateApiUrl falls back to the default", () => {

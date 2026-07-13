@@ -84,7 +84,7 @@ export function MetricBar({
       <div className="metric-track">
         <CanvasStrip
           className="metric-track-canvas"
-          height={10}
+          height={8}
           redrawKey={redrawKey}
           draw={draw}
         />

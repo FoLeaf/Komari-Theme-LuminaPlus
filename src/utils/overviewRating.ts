@@ -1,5 +1,4 @@
 export type OverviewRatingKind = "traffic" | "bandwidth" | "asset";
-export type OverviewRatingStyle = "plain" | "cultivation";
 
 export interface OverviewRating {
   level: 0 | 1 | 2 | 3;
@@ -9,43 +8,21 @@ export interface OverviewRating {
 const GB = 1024 ** 3;
 const MBPS_IN_BYTES_PER_SECOND = 1_000_000 / 8;
 
-export const OVERVIEW_RATING_STYLES: Array<{ value: OverviewRatingStyle; label: string }> = [
-  { value: "plain", label: "通用" },
-  { value: "cultivation", label: "修仙" },
-];
-
-const DEFAULT_LABELS: Record<OverviewRatingKind, Record<OverviewRatingStyle, readonly string[]>> = {
-  traffic: {
-    plain: ["轻量", "常规", "重度", "海量"],
-    cultivation: ["初行", "入道", "御风", "破空"],
-  },
-  bandwidth: {
-    plain: ["闲置", "轻载", "活跃", "爆发"],
-    cultivation: ["凝息", "运转", "疾行", "瞬身"],
-  },
-  asset: {
-    plain: ["入门", "标准", "顶级", "富佬"],
-    cultivation: ["练气", "筑基", "结丹", "元婴"],
-  },
+const DEFAULT_LABELS: Record<OverviewRatingKind, readonly string[]> = {
+  traffic: ["轻量", "常规", "重度", "海量"],
+  bandwidth: ["闲置", "轻载", "活跃", "爆发"],
+  asset: ["入门", "标准", "顶级", "富佬"],
 };
 
-export function isOverviewRatingStyle(value: unknown): value is OverviewRatingStyle {
-  return value === "plain" || value === "cultivation";
-}
-
-export function getDefaultOverviewRatingLabelText(
-  kind: OverviewRatingKind,
-  style: OverviewRatingStyle,
-) {
-  return DEFAULT_LABELS[kind][style].join(",");
+export function getDefaultOverviewRatingLabelText(kind: OverviewRatingKind) {
+  return DEFAULT_LABELS[kind].join(",");
 }
 
 export function normalizeOverviewRatingLabels(
   kind: OverviewRatingKind,
-  style: OverviewRatingStyle,
   customLabels: string | null | undefined,
 ) {
-  const fallback = DEFAULT_LABELS[kind][style];
+  const fallback = DEFAULT_LABELS[kind];
   const custom = String(customLabels ?? "")
     .split(",")
     .map((label) => label.trim())
@@ -65,15 +42,13 @@ function levelFromThresholds(value: number, thresholds: readonly [number, number
 export function getOverviewRating({
   kind,
   value,
-  style,
   customLabels,
 }: {
   kind: OverviewRatingKind;
   value: number;
-  style: OverviewRatingStyle;
   customLabels?: string | null;
 }): OverviewRating {
-  const labels = normalizeOverviewRatingLabels(kind, style, customLabels);
+  const labels = normalizeOverviewRatingLabels(kind, customLabels);
   const level =
     kind === "asset"
       ? levelFromThresholds(value, [500, 1500, 3000])

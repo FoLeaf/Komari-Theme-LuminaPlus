@@ -6,12 +6,10 @@ import {
   CircleDollarSign,
   Clock3,
   Cpu,
-  Download,
   Gauge,
   HardDrive,
   MemoryStick,
   Unplug,
-  Upload,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { Flag } from "@/components/ui/Flag";
@@ -23,7 +21,6 @@ import { QualityBars } from "./QualityBars";
 import { useNodeCardModel } from "@/hooks/useNodeCardModel";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useMetricColorsVersion } from "@/hooks/useMetricColors";
-import { formatBytes } from "@/utils/format";
 import { speedRateColor } from "@/utils/metricTone";
 import { joinTagTitle, nodeDetailLinkLabels, pingEmptyLabels } from "./nodeCardShared";
 import type { ByteRateDisplay } from "@/utils/format";
@@ -35,7 +32,13 @@ const HEALTH_BAR_COUNT = 24;
 type MiniNode = NodeInfo & NodeMetrics;
 type MiniTag = { label: string; color: string };
 
-function MiniHeader({ node, osName }: { node: MiniNode; osName: string }) {
+function MiniHeader({
+  node,
+  osName,
+}: {
+  node: MiniNode;
+  osName: string;
+}) {
   const detailLabels = nodeDetailLinkLabels(node.name, osName);
   return (
     <header className="mini-node-header">
@@ -145,36 +148,28 @@ function MiniFlowRow({ icon, value, unit, color }: { icon: ReactNode; value: str
   );
 }
 
-// 速率区:左列实时速率(速度档配色),右列累计流量;每列上传在上、下载在下。
+// 迷你档只保留实时上下行，累计流量留给小卡、大卡与列表，避免四档视图只是机械缩放。
 function MiniFlow({
-  node,
   upRate,
   downRate,
 }: {
-  node: MiniNode;
   upRate: ByteRateDisplay;
   downRate: ByteRateDisplay;
 }) {
   return (
     <div className="mini-node-flow">
-      <div className="mini-node-flow-group">
-        <MiniFlowRow
-          icon={<ArrowUp size={12} strokeWidth={2.4} />}
-          value={upRate.value}
-          unit={upRate.unit}
-          color={speedRateColor(upRate.unit)}
-        />
-        <MiniFlowRow
-          icon={<ArrowDown size={12} strokeWidth={2.4} />}
-          value={downRate.value}
-          unit={downRate.unit}
-          color={speedRateColor(downRate.unit)}
-        />
-      </div>
-      <div className="mini-node-flow-group">
-        <MiniFlowRow icon={<Upload size={12} strokeWidth={2.1} />} value={formatBytes(node.trafficUp)} />
-        <MiniFlowRow icon={<Download size={12} strokeWidth={2.1} />} value={formatBytes(node.trafficDown)} />
-      </div>
+      <MiniFlowRow
+        icon={<ArrowUp size={12} strokeWidth={2.4} />}
+        value={upRate.value}
+        unit={upRate.unit}
+        color={speedRateColor(upRate.unit)}
+      />
+      <MiniFlowRow
+        icon={<ArrowDown size={12} strokeWidth={2.4} />}
+        value={downRate.value}
+        unit={downRate.unit}
+        color={speedRateColor(downRate.unit)}
+      />
     </div>
   );
 }
@@ -274,7 +269,7 @@ export const MiniNodeCard = memo(function MiniNodeCard({ uuid }: { uuid: string 
       <MiniHeader node={node} osName={osName} />
       <MiniChips tags={footerTags} renewalPrice={renewalPrice} ipv4={node.ipv4} ipv6={node.ipv6} />
       <MiniVitals node={node} loadFraction={loadFraction} redrawKey={redrawKey} />
-      <MiniFlow node={node} upRate={upRate} downRate={downRate} />
+      <MiniFlow upRate={upRate} downRate={downRate} />
       <MiniHealth
         ping={ping}
         pingBuckets={pingBuckets}

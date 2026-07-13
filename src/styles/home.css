@@ -1,3 +1,38 @@
+/* 首页品牌铭牌：只保留站点名，绝对定位到 AppShell 已经存在的顶部留白里。 */
+.home-brand {
+  position: absolute;
+  top: -19px;
+  left: 0;
+  z-index: 30;
+  max-width: min(38rem, calc(100vw - 10rem));
+  pointer-events: none;
+}
+
+.home-brand-title {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  padding: 2px 20px 3px 0;
+  font-size: clamp(18px, 1.5vw, 21px);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .home-brand {
+    top: -18px;
+    max-width: calc(100vw - 8.5rem);
+  }
+
+  .home-brand-title {
+    font-size: 19px;
+  }
+}
+
 .home-overview {
   /* 在线/离线配色,块状与柱状共用一处确保同步;比纯 status 色稍淡,贴合主题。 */
   --overview-online: color-mix(in srgb, var(--status-success) 72%, transparent);
@@ -9,6 +44,7 @@
 }
 
 .overview-card {
+  --metric-accent: var(--text-tertiary);
   position: relative;
   display: flex;
   min-width: 0;
@@ -18,13 +54,29 @@
   border: 1px solid var(--hairline);
   border-radius: 16px;
   background:
+    radial-gradient(
+      120% 100% at 0% 0%,
+      color-mix(in srgb, var(--metric-accent) 6%, transparent) 0%,
+      transparent 52%
+    ),
     linear-gradient(
       180deg,
       color-mix(in srgb, var(--surface-elev-a) 96%, white 4%) 0%,
       var(--surface-a) 100%
-    );
+  );
   box-shadow: var(--shadow-card);
   padding: 14px 16px;
+}
+
+.overview-card[data-metric="online"] { --metric-accent: var(--status-success); }
+.overview-card[data-metric="traffic"] { --metric-accent: var(--traffic-up); }
+.overview-card[data-metric="bandwidth"] { --metric-accent: var(--speed-high); }
+.overview-card[data-metric="asset"] { --metric-accent: var(--accent-500); }
+
+/* 暗色依靠表面色阶建立层级，不叠白色顶光或指标色氛围。背景图模式仍由 --surface-a
+   保留用户配置的透明度。 */
+:root[data-appearance="dark"] .overview-card {
+  background: var(--surface-a);
 }
 
 .overview-card-head {
@@ -45,6 +97,16 @@
   text-transform: uppercase;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.overview-card-site-name {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-transform: none;
 }
 
 .overview-card-action {
@@ -75,6 +137,320 @@
   transform: scale(0.94);
 }
 
+/* 续费提醒复用资产入口，不另占首页内容流。平时只露一个轻量角标，弹层覆盖展开，
+   因此不会把概览、筛选或节点卡向下推。 */
+.renewal-reminder {
+  position: relative;
+  z-index: 70;
+  flex: 0 0 auto;
+}
+
+.renewal-reminder-trigger {
+  position: relative;
+}
+
+.renewal-reminder-dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--surface-elev);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-error) 72%, white 28%);
+  box-sizing: content-box;
+  animation: renewal-reminder-breathe 2.4s ease-in-out infinite;
+}
+
+.renewal-reminder-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1px solid color-mix(in srgb, var(--status-error) 56%, transparent);
+  border-radius: inherit;
+  opacity: 0;
+  transform: scale(0.72);
+  animation: renewal-reminder-ring 2.4s ease-out infinite;
+}
+
+@keyframes renewal-reminder-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes renewal-reminder-ring {
+  0%,
+  24% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  46% {
+    opacity: 0.42;
+  }
+  76%,
+  100% {
+    opacity: 0;
+    transform: scale(1.24);
+  }
+}
+
+.renewal-reminder-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 80;
+  width: min(380px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
+  border-radius: 16px;
+  background: var(--surface-elev);
+  box-shadow: 0 20px 46px -24px rgba(15, 23, 42, 0.42);
+  color: var(--text-primary);
+}
+
+.renewal-reminder-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 16px 12px;
+}
+
+.renewal-reminder-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.renewal-reminder-title-line h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.renewal-reminder-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-warning) 16%, transparent);
+  color: color-mix(in srgb, var(--status-warning) 84%, var(--text-primary));
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.renewal-reminder-head p {
+  margin: 6px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.renewal-reminder-close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-tertiary);
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.renewal-reminder-close:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.renewal-reminder-list {
+  display: flex;
+  max-height: 300px;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+
+.renewal-reminder-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  padding: 11px 12px;
+}
+
+.renewal-reminder-row-main {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 5px;
+}
+
+.renewal-reminder-row-main strong {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.renewal-reminder-row-main span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.2;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.renewal-reminder-status {
+  flex: 0 0 auto;
+  border-radius: 7px;
+  padding: 5px 7px;
+  font-size: 10px;
+  font-weight: 720;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.renewal-reminder-status[data-tone="critical"] {
+  background: color-mix(in srgb, var(--status-error) 12%, transparent);
+  color: var(--status-error);
+}
+
+.renewal-reminder-status[data-tone="warning"] {
+  background: color-mix(in srgb, var(--status-warning) 14%, transparent);
+  color: color-mix(in srgb, var(--status-warning) 82%, var(--text-primary));
+}
+
+.renewal-reminder-status[data-tone="success"] {
+  background: color-mix(in srgb, var(--status-success) 12%, transparent);
+  color: var(--status-success);
+}
+
+.renewal-reminder-more {
+  margin: 1px 2px 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.renewal-reminder-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  border-top: 1px solid var(--hairline);
+  padding: 11px 12px 12px;
+}
+
+.renewal-reminder-actions a,
+.renewal-reminder-actions button {
+  min-height: 32px;
+  border-radius: 9px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.renewal-reminder-detail {
+  display: inline-flex;
+  margin-right: auto;
+  align-items: center;
+  color: var(--accent-500);
+}
+
+.renewal-reminder-detail:hover {
+  background: color-mix(in srgb, var(--accent-500) 8%, transparent);
+}
+
+.renewal-reminder-later {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.renewal-reminder-later:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.renewal-reminder-dismiss {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.renewal-reminder-dismiss:hover {
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 520px) {
+  .renewal-reminder-panel {
+    position: fixed;
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+    max-height: min(72vh, 620px);
+    border-radius: 18px;
+  }
+
+  .renewal-reminder-actions {
+    flex-wrap: wrap;
+  }
+
+  .renewal-reminder-detail {
+    flex: 1 0 100%;
+    justify-content: center;
+    margin-right: 0;
+  }
+
+  .renewal-reminder-later,
+  .renewal-reminder-dismiss {
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .renewal-reminder-dot,
+  .renewal-reminder-dot::after {
+    animation: none;
+  }
+
+  .renewal-reminder-dot {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .overview-card-main {
   display: flex;
   flex: 1;
@@ -103,6 +479,15 @@
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+/* 在线数量是首卡的辅助状态，略小于流量、带宽等核心指标。 */
+.overview-card[data-metric="online"] .overview-card-value {
+  font-size: 24px;
+}
+
+.overview-card[data-metric="online"] .overview-card-unit {
+  font-size: 12px;
 }
 
 .overview-card-sub {
@@ -162,11 +547,11 @@
 }
 
 .overview-card-rating[data-rating-level="1"] {
-  color: #3b82f6;
+  color: var(--accent-500);
 }
 
 .overview-card-rating[data-rating-level="2"] {
-  color: #8b5cf6;
+  color: var(--progress-memory);
 }
 
 .overview-card-rating[data-rating-level="3"] {
@@ -343,6 +728,14 @@
 
   .overview-card-value {
     font-size: 24px;
+  }
+
+  .overview-card[data-metric="online"] .overview-card-value {
+    font-size: 21px;
+  }
+
+  .overview-card[data-metric="online"] .overview-card-unit {
+    font-size: 11px;
   }
 
   .overview-card-footer {
@@ -613,12 +1006,25 @@
   letter-spacing: 0.1em;
 }
 
+.home-overview.is-dense .overview-card-site-name {
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
 .home-overview.is-dense .overview-card-value {
   font-size: 21px;
 }
 
 .home-overview.is-dense .overview-card-unit {
   font-size: 11px;
+}
+
+.home-overview.is-dense .overview-card[data-metric="online"] .overview-card-value {
+  font-size: 19px;
+}
+
+.home-overview.is-dense .overview-card[data-metric="online"] .overview-card-unit {
+  font-size: 10px;
 }
 
 .home-overview.is-dense .overview-card-action {
