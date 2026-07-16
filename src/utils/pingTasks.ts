@@ -1,5 +1,11 @@
 export type HomepagePingTaskBindings = Record<string, string[]>;
 
+function parseTaskId(taskId: string) {
+  if (!/^\d+$/.test(taskId)) return null;
+  const parsed = Number(taskId);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function normalizeHomepagePingTaskBindings(
   value: unknown,
 ): HomepagePingTaskBindings {
@@ -9,14 +15,8 @@ export function normalizeHomepagePingTaskBindings(
 
   const normalized: HomepagePingTaskBindings = {};
   for (const [taskId, clients] of Object.entries(value)) {
-    const numericTaskId = Number(taskId);
-    if (!Number.isInteger(numericTaskId) || numericTaskId <= 0) {
-      continue;
-    }
-
-    if (!Array.isArray(clients)) {
-      continue;
-    }
+    const numericTaskId = parseTaskId(taskId);
+    if (numericTaskId == null || !Array.isArray(clients)) continue;
 
     const uniqueClients = Array.from(
       new Set(
@@ -29,7 +29,10 @@ export function normalizeHomepagePingTaskBindings(
       continue;
     }
 
-    normalized[String(numericTaskId)] = uniqueClients;
+    const normalizedTaskId = String(numericTaskId);
+    normalized[normalizedTaskId] = Array.from(
+      new Set([...(normalized[normalizedTaskId] ?? []), ...uniqueClients]),
+    );
   }
 
   return normalized;
@@ -39,15 +42,13 @@ export function invertHomepagePingTaskBindings(
   bindings: HomepagePingTaskBindings,
 ): Map<string, number> {
   const selectedTaskByClient = new Map<string, number>();
-  const entries = Object.entries(bindings).sort(
+  const entries = Object.entries(normalizeHomepagePingTaskBindings(bindings)).sort(
     ([left], [right]) => Number(left) - Number(right),
   );
 
   for (const [taskId, clients] of entries) {
-    const numericTaskId = Number(taskId);
-    if (!Number.isInteger(numericTaskId) || numericTaskId <= 0) {
-      continue;
-    }
+    const numericTaskId = parseTaskId(taskId);
+    if (numericTaskId == null) continue;
     for (const client of clients) {
       if (!selectedTaskByClient.has(client)) {
         selectedTaskByClient.set(client, numericTaskId);

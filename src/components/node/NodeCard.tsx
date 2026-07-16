@@ -114,7 +114,6 @@ export const NodeCard = memo(function NodeCard({
   return (
     <article
       className={clsx("server-card", isOffline && "is-offline")}
-      data-appearance={resolvedAppearance}
     >
       <div className="server-card-content">
         <NodeCardHeader node={node} subtitle={subtitle} osName={osName} />
@@ -205,7 +204,7 @@ function NodeCardHeader({
         <div className="server-card-title-row">
           <Flag region={node.region} size={15} />
           <Link
-            to={`/instance/${node.uuid}`}
+            to={`/instance/${encodeURIComponent(node.uuid)}`}
             className="server-card-title-link"
             title={node.name}
           >
@@ -224,7 +223,7 @@ function NodeCardHeader({
         )}
       </div>
       <Link
-        to={`/instance/${node.uuid}`}
+        to={`/instance/${encodeURIComponent(node.uuid)}`}
         className="server-card-detail-link"
         title={detailLabels.title}
         aria-label={detailLabels.ariaLabel}
@@ -709,7 +708,7 @@ function TrafficStat({
           <span className="traffic-stat-unit">{rate.unit}</span>
         </span>
       </div>
-      <div className="traffic-stat-trend" aria-hidden>
+      <div className="traffic-stat-trend">
         <TrafficDotStrip samples={samples} color={speedColor} redrawKey={redrawKey} />
         <span
           className="traffic-stat-live"

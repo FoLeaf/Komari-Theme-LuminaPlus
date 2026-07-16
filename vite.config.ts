@@ -14,8 +14,6 @@ export default defineConfig({
     target: ["es2020", "safari15.4", "chrome87"],
     rollupOptions: {
       output: {
-        // Split rarely-changing vendor code into stable chunks so the main app
-        // bundle stays small and these can be cached across deploys.
         manualChunks(id) {
           const normalized = id.replace(/\\/g, "/");
           if (!normalized.includes("/node_modules/")) return;

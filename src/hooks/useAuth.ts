@@ -4,10 +4,9 @@ import { getMe } from "@/services/api";
 export function useAuth() {
   return useQuery({
     queryKey: ["me"],
-    queryFn: getMe,
-    // 保持登录状态相对新鲜（从后台登录页返回时重新聚焦仍会重新校验），
-    // 又不会每次挂载和每次聚焦抖动都重新请求——之前那样会把 /api/me 刷爆。
+    queryFn: ({ signal }) => getMe({ signal }),
     staleTime: 30_000,
-    refetchOnWindowFocus: true,
+    // 后台在新标签页登录后，返回时必须立即校验。
+    refetchOnWindowFocus: "always",
   });
 }

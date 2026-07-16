@@ -5,9 +5,7 @@ import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { saveThemeSettings } from "@/services/api";
 import type { PublicConfig } from "@/types/komari";
 
-// 用户自定义的卡片指标配色。覆盖 tokens.css 里的 --* 变量（内联写到 <html>）。
-// 存到后端 theme_settings.metricColors（全局、跨设备同步、清缓存不丢；仅登录管理员可改）。
-// 负载跟随独立色、流量方向/速率热力同理。
+// 指标色和暗色深度保存到 theme_settings，并通过 CSS 变量全局应用。
 
 export type MetricColorKey =
   | "cpu"
@@ -22,7 +20,7 @@ export type MetricColorKey =
   | "trafficUp"
   | "trafficDown";
 
-export type MetricColorGroup = "metric" | "speed" | "traffic";
+type MetricColorGroup = "metric" | "speed" | "traffic";
 
 export const METRIC_COLOR_GROUPS: ReadonlyArray<{ id: MetricColorGroup; label: string }> = [
   { id: "metric", label: "卡片配色" },
@@ -49,10 +47,18 @@ export const METRIC_COLOR_META: ReadonlyArray<{
   { key: "trafficDown", label: "下行", cssVar: "--traffic-down", group: "traffic" },
 ];
 
-export type MetricColors = Partial<Record<MetricColorKey, string>>;
+type MetricColors = Partial<Record<MetricColorKey, string>>;
 
 const SETTINGS_KEY = "metricColors";
+const DARK_DEPTH_SETTINGS_KEY = "darkDepth";
+const DARK_DEPTH_CACHE_KEY = "komaritheme:dark-depth";
 const HEX = /^#[0-9a-f]{6}$/;
+export const DEFAULT_DARK_DEPTH = 0;
+
+interface PaletteDraft {
+  colors: MetricColors;
+  darkDepth: number;
+}
 
 function toInputHex(value: string): string {
   let v = value.trim().toLowerCase();
@@ -61,7 +67,7 @@ function toInputHex(value: string): string {
 }
 
 /** 从后端 theme_settings 解析出已保存的指标配色（校验 hex 与已知 key）。 */
-export function readMetricColorsFromSettings(
+function readMetricColorsFromSettings(
   settings: Record<string, unknown> | undefined,
 ): MetricColors {
   const raw = settings?.[SETTINGS_KEY];
@@ -75,19 +81,38 @@ export function readMetricColorsFromSettings(
   return out;
 }
 
+export function normalizeDarkDepth(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_DARK_DEPTH;
+  return Math.min(100, Math.max(0, Math.round(parsed)));
+}
+
+/** 缺省值 0 就是原有 Dark Dimmed 灰黑；只接受 0–100 的受限黑色深度。 */
+export function readDarkDepthFromSettings(
+  settings: Record<string, unknown> | undefined,
+): number {
+  return normalizeDarkDepth(settings?.[DARK_DEPTH_SETTINGS_KEY]);
+}
+
+function readPaletteDraft(settings: Record<string, unknown> | undefined): PaletteDraft {
+  return {
+    colors: readMetricColorsFromSettings(settings),
+    darkDepth: readDarkDepthFromSettings(settings),
+  };
+}
+
 // ---- 已应用配色：写 CSS 变量 + 维护 version 让 canvas 卡片即时重绘 ----
 let version = 0;
 let appliedSig = "__init__";
+let appliedDarkDepth: number | null = null;
 let rafId: number | null = null;
 const listeners = new Set<() => void>();
 
-// 编辑会话:管理员一旦改色,直到这一笔保存成功回环之前都置 true。期间本地草稿/预览是
-// 唯一权威——任何无关的 public config 刷新(窗口聚焦、其它设置保存返回旧 metricColors)
-// 都不得经全局同步或编辑器把颜色打回旧值。全局同步与编辑器共用这一个模块级标记。
+// 编辑期间以本地预览为准，避免 public config 刷新闪回旧值。
 let metricColorEditing = false;
 
 function bumpVersionThrottled() {
-  // 拖动取色器时每帧多次调用，version+emit 合并到每帧一次，避免每个事件都重渲染/重绘所有卡片。
+  // 合并同一帧的取色事件，避免重复重绘所有卡片。
   if (rafId != null) return;
   rafId = requestAnimationFrame(() => {
     rafId = null;
@@ -97,7 +122,7 @@ function bumpVersionThrottled() {
 }
 
 /** 把一组配色应用到 <html>（CSS 变量即时覆盖；canvas 经 version 重绘）。相同配色不重复应用。 */
-export function applyMetricColors(colors: MetricColors) {
+function applyMetricColors(colors: MetricColors) {
   const sig = JSON.stringify(colors ?? {});
   if (sig === appliedSig) return;
   appliedSig = sig;
@@ -107,9 +132,31 @@ export function applyMetricColors(colors: MetricColors) {
     if (v) root.style.setProperty(cssVar, v);
     else root.style.removeProperty(cssVar);
   }
-  // 清掉 canvas 颜色缓存，否则进度条/圆点会继续画旧色。
   clearCssColorCache();
   bumpVersionThrottled();
+}
+
+/** 只设置强度变量；亮色 token 不引用它，因此调整不会污染浅色模式。 */
+function applyDarkDepth(value: number) {
+  const depth = normalizeDarkDepth(value);
+  if (depth === appliedDarkDepth) return;
+  appliedDarkDepth = depth;
+  const root = document.documentElement;
+  if (depth === DEFAULT_DARK_DEPTH) root.style.removeProperty("--dark-depth");
+  else root.style.setProperty("--dark-depth", String(depth));
+  clearCssColorCache();
+  bumpVersionThrottled();
+  try {
+    if (depth === DEFAULT_DARK_DEPTH) localStorage.removeItem(DARK_DEPTH_CACHE_KEY);
+    else localStorage.setItem(DARK_DEPTH_CACHE_KEY, String(depth));
+  } catch {
+    // 首帧缓存失败不影响当前预览与后端设置。
+  }
+}
+
+function applyPalette(palette: PaletteDraft) {
+  applyMetricColors(palette.colors);
+  applyDarkDepth(palette.darkDepth);
 }
 
 /** 供 canvas 卡片（NodeCard）订阅：配色变化时拼进 redrawKey 触发重绘。 */
@@ -135,88 +182,86 @@ export function readEffectiveColors(): Record<MetricColorKey, string> {
 /** 全局：把后端保存的配色应用到所有访客（在 AppShell 挂载一次）。 */
 export function useMetricColorsSync() {
   const { data: config } = usePublicConfig();
-  const colors = useMemo(
-    () => readMetricColorsFromSettings(config?.theme_settings),
-    [config?.theme_settings],
+  const palette = useMemo(
+    () => (config ? readPaletteDraft(config.theme_settings) : null),
+    [config],
   );
   useEffect(() => {
-    // 管理员正在编辑配色时,预览由编辑器驱动;此处别用服务端值覆盖,避免一次 refetch
-    // 把正在拖动的颜色闪回旧值。保存成功会清除标记并 refetch,届时这里再采纳新值。
+    // 配置返回前保留 index.html 恢复的首帧缓存。
+    if (!palette) return;
     if (metricColorEditing) return;
-    applyMetricColors(colors);
-  }, [colors]);
+    applyPalette(palette);
+  }, [palette]);
 }
 
-/** 管理员编辑：改色即时预览 + 防抖保存到后端 theme_settings。 */
+/** 管理员编辑：改色/暗色深度即时预览 + 防抖保存到后端 theme_settings。 */
 export function useMetricColorsEditor() {
   const { data: config } = usePublicConfig();
   const queryClient = useQueryClient();
-  const serverColors = useMemo(
-    () => readMetricColorsFromSettings(config?.theme_settings),
+  const serverPalette = useMemo(
+    () => readPaletteDraft(config?.theme_settings),
     [config?.theme_settings],
   );
 
-  const [draft, setDraft] = useState<MetricColors>(serverColors);
+  const [draft, setDraft] = useState<PaletteDraft>(serverPalette);
   const [saveError, setSaveError] = useState(false);
-  const draftRef = useRef<MetricColors>(serverColors);
+  const draftRef = useRef<PaletteDraft>(serverPalette);
   const saveTimer = useRef<number | null>(null);
-  const serverColorsRef = useRef<MetricColors>(serverColors);
-  // 仍在防抖窗口内、尚未落库的草稿；卸载时据此补存，避免快速关闭面板丢失改动。
-  const pendingColorsRef = useRef<MetricColors | null>(null);
-  // 组件是否仍挂载——异步保存回来后据此决定是否还能 setState。
+  const serverPaletteRef = useRef<PaletteDraft>(serverPalette);
+  // 防抖窗口内的草稿会在卸载时补存。
+  const pendingPaletteRef = useRef<PaletteDraft | null>(null);
   const mountedRef = useRef(true);
-  // 串行化保存:同一时刻只允许一个请求在飞。在飞期间到来的保存只记录「最新一笔」
-  // (queuedColorsRef),当前请求落库后再发,杜绝慢的旧请求最后落库覆盖掉新颜色。
+  // 保存串行化，在飞期间只保留最新一笔排队值。
   const inFlightRef = useRef(false);
   const hasQueuedRef = useRef(false);
-  const queuedColorsRef = useRef<MetricColors>({});
+  const queuedPaletteRef = useRef<PaletteDraft>({ colors: {}, darkDepth: DEFAULT_DARK_DEPTH });
 
-  // 后端配色变化（含自身保存后的 refetch）时同步草稿。但正在编辑(拖动/防抖/保存未回环)
-  // 时本地草稿压过服务端:不让一次无关的 refetch 返回旧 metricColors 把草稿打回旧值。
-  // 保存成功会清除编辑标记并触发 refetch,届时再采纳(此时服务端已等于本地草稿)。
+  // 非编辑状态才接受服务端回流。
   useEffect(() => {
     if (metricColorEditing) return;
-    serverColorsRef.current = serverColors;
-    draftRef.current = serverColors;
-    setDraft(serverColors);
-  }, [serverColors]);
+    serverPaletteRef.current = serverPalette;
+    draftRef.current = serverPalette;
+    setDraft(serverPalette);
+  }, [serverPalette]);
 
   const finishEditing = useCallback((restoreSaved = false) => {
     metricColorEditing = false;
-    if (restoreSaved) applyMetricColors(serverColorsRef.current);
+    if (restoreSaved) applyPalette(serverPaletteRef.current);
   }, []);
 
-  // 真正写后端。供防抖计时器与卸载补存两处复用。saveError 只在仍挂载时更新——
-  // 即便请求在飞途中组件卸载（防抖已触发那段窄窗口），回来也不会对已卸载组件 setState。
-  // 串行化:在飞期间再调只暂存最新一笔,当前落库后接着发,旧请求不会覆盖新颜色。
+  // 防抖计时器与卸载补存共用；卸载后不再 setState。
   const persist = useCallback(
-    async (colors: MetricColors) => {
+    async (palette: PaletteDraft) => {
       if (!config) {
         if (!mountedRef.current) finishEditing(true);
         return;
       }
       if (inFlightRef.current) {
-        queuedColorsRef.current = colors;
+        queuedPaletteRef.current = palette;
         hasQueuedRef.current = true;
         return;
       }
       inFlightRef.current = true;
-      let current = colors;
+      let current = palette;
       let lastOk = false;
       let savedAny = false;
       try {
         for (;;) {
-          // 每轮都取最新的 public 缓存做合并基:避免拿过期 theme_settings 回写,
-          // 把主题管理页同期保存的其它设置覆盖掉。
+          // 合并最新 public 缓存，保留同期保存的其他主题设置。
           const latest = queryClient.getQueryData<PublicConfig>(["public"]) ?? config;
           const nextSettings: Record<string, unknown> = { ...(latest.theme_settings ?? {}) };
-          if (Object.keys(current).length > 0) nextSettings[SETTINGS_KEY] = current;
+          if (Object.keys(current.colors).length > 0) nextSettings[SETTINGS_KEY] = current.colors;
           else delete nextSettings[SETTINGS_KEY];
+          if (current.darkDepth !== DEFAULT_DARK_DEPTH) {
+            nextSettings[DARK_DEPTH_SETTINGS_KEY] = current.darkDepth;
+          } else {
+            delete nextSettings[DARK_DEPTH_SETTINGS_KEY];
+          }
           try {
             await saveThemeSettings(latest.theme, nextSettings);
             lastOk = true;
             savedAny = true;
-            serverColorsRef.current = current;
+            serverPaletteRef.current = current;
             if (mountedRef.current) setSaveError(false);
           } catch {
             lastOk = false;
@@ -224,12 +269,13 @@ export function useMetricColorsEditor() {
           }
           if (!hasQueuedRef.current) break;
           hasQueuedRef.current = false;
-          current = queuedColorsRef.current;
+          current = queuedPaletteRef.current;
         }
       } finally {
         inFlightRef.current = false;
       }
-      if (lastOk) {
+      const hasPendingSave = pendingPaletteRef.current != null || saveTimer.current != null;
+      if (lastOk && !hasPendingSave) {
         finishEditing();
       } else if (!mountedRef.current) {
         finishEditing(true);
@@ -241,16 +287,13 @@ export function useMetricColorsEditor() {
     [config, finishEditing, queryClient],
   );
 
-  // 用 ref 持有最新 persist，让卸载 effect 保持空依赖——只在真正卸载时跑，
-  // 不会因 config 刷新（persist 重建）而把进行中的草稿提前补存。
+  // 卸载 effect 通过 ref 使用最新 persist，不受 config 刷新影响。
   const persistRef = useRef(persist);
   useEffect(() => {
     persistRef.current = persist;
   }, [persist]);
 
-  // 挂载标记 + 卸载收尾。卸载时先置 mounted=false（让进行中/补存的 persist 回来后不再 setState），
-  // 再清防抖计时器，并把未落库的草稿补存一次——在防抖窗口内关闭面板不丢改动。
-  // (用 effect body 重置 mounted=true 以兼容 StrictMode 的卸载/重挂。)
+  // 卸载时清理计时器，并补存尚未落库的草稿。
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -259,41 +302,37 @@ export function useMetricColorsEditor() {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
       }
-      if (pendingColorsRef.current != null) {
-        // 有待补存:其 persist 的收尾会据 mountedRef(此刻已 false)释放编辑标记。
-        void persistRef.current(pendingColorsRef.current);
-        pendingColorsRef.current = null;
+      if (pendingPaletteRef.current != null) {
+        void persistRef.current(pendingPaletteRef.current);
+        pendingPaletteRef.current = null;
       } else if (inFlightRef.current) {
-        // 有在飞保存:由该 persist 的收尾释放,这里不动,避免在飞窗口里预览闪回旧色。
+        // 在飞请求负责收尾。
       } else {
-        // 无待补存/在飞保存时关闭，直接回到已保存配色；覆盖失败后的本地预览色。
         finishEditing(true);
       }
     };
   }, [finishEditing]);
 
   const scheduleSave = useCallback(
-    (colors: MetricColors) => {
+    (palette: PaletteDraft) => {
       if (!config) return;
       if (saveTimer.current != null) clearTimeout(saveTimer.current);
-      pendingColorsRef.current = colors;
-      // 防抖：拖动停手后再写后端，避免每次 onChange 都发请求。
+      pendingPaletteRef.current = palette;
       saveTimer.current = window.setTimeout(() => {
         saveTimer.current = null;
-        pendingColorsRef.current = null;
-        void persist(colors);
+        pendingPaletteRef.current = null;
+        void persist(palette);
       }, 500);
     },
     [config, persist],
   );
 
   const commit = useCallback(
-    (next: MetricColors) => {
-      // 一旦本地改色就进入编辑会话:在保存成功回环前,本地草稿/预览压过任何服务端刷新。
+    (next: PaletteDraft) => {
       metricColorEditing = true;
       draftRef.current = next;
       setDraft(next);
-      applyMetricColors(next); // 即时预览
+      applyPalette(next); // 即时预览
       scheduleSave(next); // 防抖落库
     },
     [scheduleSave],
@@ -302,21 +341,44 @@ export function useMetricColorsEditor() {
   const setColor = useCallback(
     (key: MetricColorKey, hex: string) => {
       const v = hex.toLowerCase();
-      if (HEX.test(v)) commit({ ...draftRef.current, [key]: v });
+      if (HEX.test(v)) {
+        commit({
+          ...draftRef.current,
+          colors: { ...draftRef.current.colors, [key]: v },
+        });
+      }
     },
     [commit],
   );
 
   const resetColor = useCallback(
     (key: MetricColorKey) => {
-      const next = { ...draftRef.current };
-      delete next[key];
-      commit(next);
+      const colors = { ...draftRef.current.colors };
+      delete colors[key];
+      commit({ ...draftRef.current, colors });
     },
     [commit],
   );
 
-  const resetAll = useCallback(() => commit({}), [commit]);
+  const setDarkDepth = useCallback(
+    (value: number) => {
+      commit({ ...draftRef.current, darkDepth: normalizeDarkDepth(value) });
+    },
+    [commit],
+  );
 
-  return { colors: draft, setColor, resetColor, resetAll, saveError };
+  const resetAll = useCallback(
+    () => commit({ colors: {}, darkDepth: DEFAULT_DARK_DEPTH }),
+    [commit],
+  );
+
+  return {
+    colors: draft.colors,
+    darkDepth: draft.darkDepth,
+    setColor,
+    resetColor,
+    setDarkDepth,
+    resetAll,
+    saveError,
+  };
 }

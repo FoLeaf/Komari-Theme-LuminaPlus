@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   calculateCostPremiumAmount,
   calculateCostSummary,
   formatCnyMoney,
+  getExchangeRates,
   isCostRateApiUrlValid,
   normalizeCostIgnoredNodes,
   normalizeCostPremiums,
@@ -13,6 +14,10 @@ import type { NodeInfo } from "@/types/komari";
 
 const RATES = { USD: 1, CNY: 7 };
 const RATES_X = { USD: 1, EUR: 0.9, CNY: 7 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // 分类计数器已从 CostSummary 移除(分类信息由 detail.note / detail.counted 承担),
 // 测试改为直接从 details 派生数量。
@@ -402,5 +407,92 @@ describe("cost helpers", () => {
   it("formatCnyMoney guards NaN and formats two decimals", () => {
     expect(formatCnyMoney(1234.5)).toBe("¥ 1,234.50");
     expect(formatCnyMoney(Number.NaN)).toBe("¥ 0.00");
+  });
+
+  it("ignores malformed or future-dated exchange-rate caches", async () => {
+    const entries = new Map<string, string>();
+    const localStorageMock = {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => entries.set(key, value),
+      removeItem: (key: string) => entries.delete(key),
+    };
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ rates: { CNY: 7 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("localStorage", localStorageMock);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const futureUrl = "https://cache.test/future";
+    entries.set(
+      `komaritheme:cost-rates:${futureUrl}`,
+      JSON.stringify({ rates: { CNY: 999 }, time: Date.now() + 60_000 }),
+    );
+    const malformedUrl = "https://cache.test/malformed";
+    entries.set(
+      `komaritheme:cost-rates:${malformedUrl}`,
+      JSON.stringify({ rates: "invalid", time: Date.now() }),
+    );
+
+    await expect(getExchangeRates(futureUrl)).resolves.toMatchObject({
+      rates: { CNY: 7 },
+    });
+    await expect(getExchangeRates(malformedUrl)).resolves.toMatchObject({
+      rates: { CNY: 7 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("can bypass a fresh exchange-rate cache for manual refresh", async () => {
+    const url = "https://cache.test/manual";
+    const key = `komaritheme:cost-rates:${url}`;
+    const entries = new Map([
+      [key, JSON.stringify({ rates: { USD: 1, CNY: 6 }, time: Date.now() })],
+    ]);
+    const localStorageMock = {
+      getItem: (name: string) => entries.get(name) ?? null,
+      setItem: (name: string, value: string) => entries.set(name, value),
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ rates: { CNY: 7 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("localStorage", localStorageMock);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getExchangeRates(url)).resolves.toMatchObject({ rates: { CNY: 6 } });
+    await expect(getExchangeRates(url, { ignoreCache: true })).resolves.toMatchObject({
+      rates: { CNY: 7 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace a cancelled request with stale cached rates", async () => {
+    const url = "https://cache.test/cancelled";
+    const key = `komaritheme:cost-rates:${url}`;
+    const entries = new Map([
+      [
+        key,
+        JSON.stringify({
+          rates: { USD: 1, CNY: 6 },
+          time: Date.now() - 2 * 60 * 60 * 1000,
+        }),
+      ],
+    ]);
+    vi.stubGlobal("localStorage", {
+      getItem: (name: string) => entries.get(name) ?? null,
+      setItem: (name: string, value: string) => entries.set(name, value),
+    });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("cancelled")));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(getExchangeRates(url, { signal: controller.signal })).rejects.toThrow(
+      "cancelled",
+    );
   });
 });

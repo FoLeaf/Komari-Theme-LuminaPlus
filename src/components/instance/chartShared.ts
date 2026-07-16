@@ -136,24 +136,17 @@ export function buildPingTimeRangeOptions(maxHours: number | null | undefined) {
   return PING_TIME_RANGE_OPTIONS.filter((option) => option.value <= safeMaxHours);
 }
 
-const GRID_CHART_DEFAULT = { w: 420, h: 150 };
-const GRID_CHART_DESKTOP_MAX_WIDTH = 480;
-const GRID_CHART_TABLET_MAX_WIDTH = 560;
-const GRID_CHART_DESKTOP_GUTTER = 180;
-const GRID_CHART_TABLET_GUTTER = 100;
-const GRID_CHART_MOBILE_GUTTER = 56;
+const GRID_CHART_DEFAULT = { w: 320, h: 132 };
 const GRID_CHART_HEIGHT = 132;
-const WIDE_CHART_MIN_WIDTH = 300;
-const WIDE_CHART_MAX_WIDTH = 1720;
 const WIDE_CHART_GUTTER = 96;
 const WIDE_CHART_HEIGHT = 340;
 const WIDE_CHART_TABLET_HEIGHT = 300;
 const WIDE_CHART_MOBILE_HEIGHT = 260;
-// 把响应式图表宽度量化到这个步长，让拖拽改尺寸收敛到离散尺寸，而非每个像素都重建 uPlot。
 const CHART_WIDTH_STEP = 8;
 
 export function toChartSeconds(value: string | number): number {
   if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
     return value > 1_000_000_000_000 ? value / 1000 : value;
   }
   const parsed = Date.parse(value);
@@ -239,10 +232,6 @@ function getChartTooltipPosition({
   return { left, top };
 }
 
-// LoadChart 和 PingChart 共享的光标/tooltip 流程。两者接的是同一套 uPlot hook——mouseleave 时隐藏，
-// 光标移动时读取悬停的 x 时间戳，用 getChartTooltipPosition 定位并提交 tooltip——所以只有每行的
-// 格式化 (buildRows) 和 tooltip 预估宽度不同。`dataRef` 指向实时的 AlignedData (chart 把自己的数据
-// 存在 ref 里，免得 hook 闭包拿到过期数据)。
 export function buildChartTooltipHooks({
   dataRef,
   rangeHours,
@@ -255,42 +244,70 @@ export function buildChartTooltipHooks({
   estimatedWidth: number;
   setTooltip: Dispatch<SetStateAction<ChartTooltipState>>;
   buildRows: (idx: number) => ChartTooltipState["rows"];
-}): { onInit: (u: uPlot) => void; onSetCursor: (u: uPlot) => void } {
-  const hide = () => setTooltip((prev) => ({ ...prev, show: false }));
+}): {
+  onInit: (u: uPlot) => void;
+  onDestroy: (u: uPlot) => void;
+  onSetCursor: (u: uPlot) => void;
+} {
+  let frame: number | null = null;
+  let view: Window | null = null;
+  const cancelScheduled = () => {
+    if (frame != null) view?.cancelAnimationFrame(frame);
+    frame = null;
+  };
+  const hide = () => {
+    cancelScheduled();
+    setTooltip((prev) => (prev.show ? { ...prev, show: false } : prev));
+  };
+  const update = (u: uPlot) => {
+    frame = null;
+    const idx = u.cursor.idx;
+    if (idx == null || idx < 0) {
+      hide();
+      return;
+    }
+    const timestamp = dataRef.current[0]?.[idx];
+    if (typeof timestamp !== "number") {
+      hide();
+      return;
+    }
+    const bbox = u.root.getBoundingClientRect();
+    const anchorX = u.over.offsetLeft + u.valToPos(timestamp, "x");
+    const anchorY =
+      u.over.offsetTop +
+      (typeof u.cursor.top === "number" ? u.cursor.top : u.over.clientHeight * 0.5);
+    const rows = buildRows(idx);
+    const position = getChartTooltipPosition({
+      containerWidth: bbox.width,
+      containerHeight: bbox.height,
+      anchorX,
+      anchorY,
+      rowCount: rows.length,
+      estimatedWidth,
+    });
+    setTooltip({
+      show: true,
+      left: position.left,
+      top: position.top,
+      rows,
+      time: formatTooltipTime(timestamp, rangeHours),
+    });
+  };
   return {
     onInit: (u) => {
+      view = u.root.ownerDocument.defaultView;
       u.root.addEventListener("mouseleave", hide);
     },
+    onDestroy: (u) => {
+      cancelScheduled();
+      u.root.removeEventListener("mouseleave", hide);
+      view = null;
+    },
     onSetCursor: (u) => {
-      const idx = u.cursor.idx;
-      if (idx == null || idx < 0) {
-        hide();
-        return;
-      }
-      const timestamp = dataRef.current[0]?.[idx];
-      if (typeof timestamp !== "number") {
-        hide();
-        return;
-      }
-      const bbox = u.root.getBoundingClientRect();
-      const anchorX = u.valToPos(timestamp, "x");
-      const anchorY = typeof u.cursor.top === "number" ? u.cursor.top : bbox.height * 0.5;
-      const rows = buildRows(idx);
-      const position = getChartTooltipPosition({
-        containerWidth: bbox.width,
-        containerHeight: bbox.height,
-        anchorX,
-        anchorY,
-        rowCount: rows.length,
-        estimatedWidth,
-      });
-      setTooltip({
-        show: true,
-        left: position.left,
-        top: position.top,
-        rows,
-        time: formatTooltipTime(timestamp, rangeHours),
-      });
+      if (!view) view = u.root.ownerDocument.defaultView;
+      if (frame != null) return;
+      frame = view?.requestAnimationFrame(() => update(u)) ?? null;
+      if (frame == null) update(u);
     },
   };
 }
@@ -300,10 +317,14 @@ function computeChartSize(
   viewportWidth: number,
   containerWidth?: number,
 ): { w: number; h: number } {
-  // 在封顶以下，grid 宽度是连续的 (width - gutter) / N，所以拖拽改尺寸时精确的"不变则跳过"
-  // 永远不触发，每个 rAF 帧都会重建全部 6 个 uPlot 图表。量化到步长能把一串近乎相同的宽度
-  // 收敛成一个，于是大约每步才重建一次。
-  const q = (value: number) => Math.floor(value / CHART_WIDTH_STEP) * CHART_WIDTH_STEP;
+  const quantize = (value: number) =>
+    Math.max(1, Math.floor(value / CHART_WIDTH_STEP) * CHART_WIDTH_STEP);
+  const measuredWidth =
+    typeof containerWidth === "number" && containerWidth > 0
+      ? containerWidth
+      : mode === "wide"
+        ? viewportWidth - WIDE_CHART_GUTTER
+        : GRID_CHART_DEFAULT.w;
 
   if (mode === "wide") {
     const height =
@@ -312,33 +333,15 @@ function computeChartSize(
         : viewportWidth < 1024
           ? WIDE_CHART_TABLET_HEIGHT
           : WIDE_CHART_HEIGHT;
-    const measuredWidth =
-      typeof containerWidth === "number" && containerWidth > 0
-        ? containerWidth
-        : viewportWidth - WIDE_CHART_GUTTER;
     return {
-      w: Math.min(WIDE_CHART_MAX_WIDTH, Math.max(WIDE_CHART_MIN_WIDTH, q(measuredWidth))),
+      w: quantize(measuredWidth),
       h: height,
     };
   }
 
-  if (viewportWidth >= 1280) {
-    return {
-      w: Math.min(GRID_CHART_DESKTOP_MAX_WIDTH, q((viewportWidth - GRID_CHART_DESKTOP_GUTTER) / 3)),
-      h: GRID_CHART_HEIGHT,
-    };
-  }
-
-  if (viewportWidth >= 768) {
-    return {
-      w: Math.min(GRID_CHART_TABLET_MAX_WIDTH, q((viewportWidth - GRID_CHART_TABLET_GUTTER) / 2)),
-      h: GRID_CHART_HEIGHT,
-    };
-  }
-
   return {
-    w: Math.max(WIDE_CHART_MIN_WIDTH - 20, q(viewportWidth - GRID_CHART_MOBILE_GUTTER)),
-    h: 136,
+    w: quantize(measuredWidth),
+    h: viewportWidth < 768 ? 136 : GRID_CHART_HEIGHT,
   };
 }
 
@@ -346,7 +349,7 @@ export function useResponsiveChartSize(mode: "grid" | "wide") {
   const [size, setSize] = useState(
     mode === "grid"
       ? GRID_CHART_DEFAULT
-      : { w: WIDE_CHART_MAX_WIDTH, h: WIDE_CHART_HEIGHT },
+      : { w: 1280, h: WIDE_CHART_HEIGHT },
   );
   const nodeRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
@@ -354,7 +357,6 @@ export function useResponsiveChartSize(mode: "grid" | "wide") {
 
   const apply = useCallback(() => {
     const next = computeChartSize(mode, window.innerWidth, nodeRef.current?.clientWidth);
-    // 计算出的尺寸没变就跳过 setState (以及它触发的 uPlot 拆建)。
     setSize((prev) => (prev.w === next.w && prev.h === next.h ? prev : next));
   }, [mode]);
 
@@ -366,33 +368,44 @@ export function useResponsiveChartSize(mode: "grid" | "wide") {
     });
   }, [apply]);
 
-  // 回调 ref：容器每次重新挂载都重新测量 + 重新 observe（修复卸载后 observer 失效、尺寸冻结）。
-  const ref = useCallback(
+  const observeNode = useCallback(
     (node: HTMLDivElement | null) => {
       observerRef.current?.disconnect();
       observerRef.current = null;
-      nodeRef.current = node;
-      if (node) {
-        if (mode === "wide" && typeof ResizeObserver !== "undefined") {
-          const observer = new ResizeObserver(scheduleApply);
-          observer.observe(node);
-          observerRef.current = observer;
-        }
-        scheduleApply();
+      if (node && typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(scheduleApply);
+        observer.observe(node);
+        observerRef.current = observer;
       }
     },
-    [mode, scheduleApply],
+    [scheduleApply],
+  );
+
+  const ref = useCallback(
+    (node: HTMLDivElement | null) => {
+      nodeRef.current = node;
+      observeNode(node);
+      if (node) {
+        apply();
+      }
+    },
+    [apply, observeNode],
   );
 
   useEffect(() => {
+    observeNode(nodeRef.current);
     apply();
     window.addEventListener("resize", scheduleApply);
     return () => {
       window.removeEventListener("resize", scheduleApply);
       observerRef.current?.disconnect();
-      if (frameRef.current != null) window.cancelAnimationFrame(frameRef.current);
+      observerRef.current = null;
+      if (frameRef.current != null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
     };
-  }, [apply, scheduleApply]);
+  }, [apply, observeNode, scheduleApply]);
 
   return { ...size, ref };
 }

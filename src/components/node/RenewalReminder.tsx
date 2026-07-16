@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { CircleDollarSign, X } from "lucide-react";
 import type { NodeInfo } from "@/types/komari";
@@ -15,6 +15,7 @@ import {
 
 const STORAGE_KEY = "lumina-renewal-reminders-v1";
 const MAX_VISIBLE_ROWS = 4;
+const CLOCK_REFRESH_MS = 60 * 60 * 1000;
 
 function readPreferences(): RenewalReminderPreferences {
   if (typeof window === "undefined") return EMPTY_RENEWAL_REMINDER_PREFERENCES;
@@ -27,9 +28,9 @@ function readPreferences(): RenewalReminderPreferences {
       snoozedUntil:
         parsed?.snoozedUntil && typeof parsed.snoozedUntil === "object"
           ? Object.fromEntries(
-              Object.entries(parsed.snoozedUntil).filter(
-                ([key, value]) => key.length > 0 && Number.isFinite(Number(value)),
-              ),
+              Object.entries(parsed.snoozedUntil)
+                .filter(([key, value]) => key.length > 0 && Number.isFinite(Number(value)))
+                .map(([key, value]) => [key, Number(value)]),
             )
           : {},
     };
@@ -54,7 +55,7 @@ function AssetLink() {
       aria-label="打开资产统计页"
       title="资产统计"
     >
-      <CircleDollarSign size={15} />
+      <CircleDollarSign size={15} aria-hidden />
     </Link>
   );
 }
@@ -64,6 +65,10 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
   const [clock, setClock] = useState(() => Date.now());
   const [preferences, setPreferences] = useState(readPreferences);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const panelId = useId();
+  const titleId = useId();
   const reminders = useMemo(() => getRenewalReminders(nodes, clock), [clock, nodes]);
   const visibleReminders = useMemo(
     () => getVisibleRenewalReminders(reminders, preferences, clock),
@@ -72,19 +77,26 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
+    closeRef.current?.focus();
+    const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
     };
-    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (visibleReminders.length === 0 && open) setOpen(false);
+  }, [open, visibleReminders.length]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -95,18 +107,26 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
   }, []);
 
   useEffect(() => {
-    const nextWakeAt = Object.values(preferences.snoozedUntil)
-      .map(Number)
-      .filter((value) => value > clock)
-      .sort((a, b) => a - b)[0];
-    if (!nextWakeAt) return;
-    const timeout = window.setTimeout(() => setClock(Date.now()), nextWakeAt - clock + 50);
+    const now = Date.now();
+    let nextWakeAt = now + CLOCK_REFRESH_MS;
+    for (const value of Object.values(preferences.snoozedUntil)) {
+      if (value > now && value < nextWakeAt) nextWakeAt = value;
+    }
+    const timeout = window.setTimeout(
+      () => setClock(Date.now()),
+      Math.max(1_000, nextWakeAt - now + 50),
+    );
     return () => window.clearTimeout(timeout);
   }, [clock, preferences.snoozedUntil]);
 
   const updatePreferences = (next: RenewalReminderPreferences) => {
     setPreferences(next);
     storePreferences(next);
+  };
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
   };
 
   const snooze = () => {
@@ -119,7 +139,7 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
       },
     });
     setClock(Date.now());
-    setOpen(false);
+    closeAndRestoreFocus();
   };
 
   const dismissCurrentCycles = () => {
@@ -130,7 +150,7 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
       delete snoozedUntil[item.cycleKey];
     }
     updatePreferences({ dismissedCycles: [...dismissed], snoozedUntil });
-    setOpen(false);
+    closeAndRestoreFocus();
   };
 
   if (visibleReminders.length === 0) return <AssetLink />;
@@ -141,36 +161,44 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
   return (
     <div className="renewal-reminder" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="overview-card-action renewal-reminder-trigger"
         aria-label={`${visibleReminders.length} 个续费提醒`}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
         title={`${visibleReminders.length} 个续费提醒`}
         onClick={() => setOpen((value) => !value)}
       >
-        <CircleDollarSign size={15} />
+        <CircleDollarSign size={15} aria-hidden />
         <span className="renewal-reminder-dot" aria-hidden />
       </button>
 
       {open && (
-        <section className="renewal-reminder-panel" role="dialog" aria-label="续费提醒">
+        <section
+          id={panelId}
+          className="renewal-reminder-panel"
+          role="dialog"
+          aria-labelledby={titleId}
+        >
           <header className="renewal-reminder-head">
             <div>
               <div className="renewal-reminder-title-line">
-                <h2>续费提醒</h2>
+                <h2 id={titleId}>续费提醒</h2>
                 <span className="renewal-reminder-count">{visibleReminders.length}</span>
               </div>
               <p>{visibleReminders.length} 台节点将在 {RENEWAL_WARNING_DAYS} 天内到期</p>
             </div>
             <button
+              ref={closeRef}
               type="button"
               className="renewal-reminder-close"
               aria-label="关闭续费提醒"
               title="关闭"
-              onClick={() => setOpen(false)}
+              onClick={closeAndRestoreFocus}
             >
-              <X size={15} />
+              <X size={15} aria-hidden />
             </button>
           </header>
 

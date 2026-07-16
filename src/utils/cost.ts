@@ -121,13 +121,30 @@ function localDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function parseLocalDateKey(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(year, month - 1, day);
+  return parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
+    ? parsed.getTime()
+    : null;
+}
+
+function parseAcquiredTimestamp(value: string) {
+  const localDate = parseLocalDateKey(value);
+  if (localDate != null) return localDate;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeAcquiredAt(value: unknown) {
   const raw = typeof value === "string" ? value.trim() : "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || raw > localDateKey()) return undefined;
-  const parsed = new Date(`${raw}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === raw
-    ? raw
-    : undefined;
+  return parseLocalDateKey(raw) != null && raw <= localDateKey() ? raw : undefined;
 }
 
 // 以节点 uuid 为 key。旧版纯数字自动升格为 { amount };非法日期/收购价只丢字段不丢条目;
@@ -191,8 +208,8 @@ function premiumAmortMonths(
   now: number,
 ): number | null {
   if (!acquiredAt) return null;
-  const acquiredMs = Date.parse(acquiredAt);
-  if (!Number.isFinite(acquiredMs) || acquiredMs > now) return null;
+  const acquiredMs = parseAcquiredTimestamp(acquiredAt);
+  if (acquiredMs == null || acquiredMs > now) return null;
 
   const expiresMs = resolveExpireTimestamp(expiredAt);
   const span =
@@ -214,9 +231,9 @@ function premiumRemainingValue(
   if (expiresMs == null || expiresMs - now >= AMORT_LONG_TERM_MS) return premium;
   if (expiresMs <= now) return 0;
 
-  const acquiredMs = acquiredAt ? Date.parse(acquiredAt) : Number.NaN;
+  const acquiredMs = acquiredAt ? parseAcquiredTimestamp(acquiredAt) : null;
   if (
-    !Number.isFinite(acquiredMs) ||
+    acquiredMs == null ||
     acquiredMs > now ||
     acquiredMs >= expiresMs ||
     expiresMs - acquiredMs >= AMORT_LONG_TERM_MS
@@ -332,19 +349,18 @@ export function formatSignedCny(value: number) {
 
 function readRateCache(cacheKey: string, allowExpired = false): ExchangeRateData | null {
   try {
-    const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as ExchangeRateData | null;
-    if (
-      cached &&
-      cached.rates &&
-      (!allowExpired || Date.now() - cached.time >= 0) &&
-      (allowExpired || Date.now() - cached.time < RATE_CACHE_TTL_MS)
-    ) {
-      return cached;
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as unknown;
+    if (!cached || typeof cached !== "object" || Array.isArray(cached)) return null;
+    const record = cached as Record<string, unknown>;
+    const time = typeof record.time === "number" ? record.time : Number.NaN;
+    const age = Date.now() - time;
+    if (!Number.isFinite(time) || age < 0 || (!allowExpired && age >= RATE_CACHE_TTL_MS)) {
+      return null;
     }
+    return { ...parseRatePayload(record), time };
   } catch {
     return null;
   }
-  return null;
 }
 
 function writeRateCache(cacheKey: string, data: ExchangeRateData) {
@@ -387,15 +403,23 @@ function parseRatePayload(payload: unknown): Pick<ExchangeRateData, "rates"> {
   return { rates };
 }
 
-export async function getExchangeRates(rateApiUrl: string): Promise<ExchangeRateData> {
+interface ExchangeRateRequestOptions {
+  signal?: AbortSignal;
+  ignoreCache?: boolean;
+}
+
+export async function getExchangeRates(
+  rateApiUrl: string,
+  options: ExchangeRateRequestOptions = {},
+): Promise<ExchangeRateData> {
   const cacheKey = `${RATE_CACHE_KEY_PREFIX}${rateApiUrl}`;
-  const cached = readRateCache(cacheKey);
+  const cached = options.ignoreCache ? null : readRateCache(cacheKey);
   if (cached) return cached;
 
   try {
     const response = await fetchWithTimeout(
       rateApiUrl,
-      { cache: "no-store" },
+      { cache: "no-store", signal: options.signal },
       RATE_REQUEST_TIMEOUT_MS,
     );
     if (!response.ok) {
@@ -410,6 +434,7 @@ export async function getExchangeRates(rateApiUrl: string): Promise<ExchangeRate
     writeRateCache(cacheKey, data);
     return data;
   } catch (error) {
+    if (options.signal?.aborted) throw error;
     const old = readRateCache(cacheKey, true);
     if (old) {
       return old;
@@ -435,6 +460,7 @@ export function calculateCostSummary(
   ignoredNodes: string[],
   rates: Record<string, number>,
   premiums: Record<string, CostPremiumEntry> = {},
+  now = Date.now(),
 ): CostSummary {
   let totalCny = 0;
   let monthlyCny = 0;
@@ -444,8 +470,6 @@ export function calculateCostSummary(
   let premiumRemainingTotalCny = 0;
   const details: CostSummaryDetail[] = [];
   const ignored = buildNodeIdentitySet(ignoredNodes);
-  const now = Date.now();
-
   for (const node of nodes as CostNode[]) {
     const name = node.name || node.display_name || node.remark || node.uuid;
     const cycleDays = billingCycleDays(node.billing_cycle);

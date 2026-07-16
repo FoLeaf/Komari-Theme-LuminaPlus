@@ -5,7 +5,7 @@ import type { PublicConfig } from "@/types/komari";
 export function usePublicConfig() {
   return useQuery<PublicConfig>({
     queryKey: ["public"],
-    queryFn: getPublic,
+    queryFn: ({ signal }) => getPublic({ signal }),
     staleTime: 60_000,
   });
 }

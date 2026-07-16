@@ -6,10 +6,12 @@ import { getPingOverview } from "@/services/api";
 import type {
   PingOverviewBucket,
   PingOverviewItem,
+  PingRecord,
   PingTaskStats,
 } from "@/types/komari";
-import { signalWithTimeout } from "@/utils/abort";
+import { withTimeoutSignal } from "@/utils/abort";
 import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
+import { resolvePingSampleCounts } from "@/utils/pingMetrics";
 import {
   invertHomepagePingTaskBindings,
   type HomepagePingTaskBindings,
@@ -106,7 +108,7 @@ function equalPingItem(a: PingOverviewItem | undefined, b: PingOverviewItem | un
 
 function buildPingOverviewItems(
   taskId: number,
-  records: Array<{ task_id: number; time: string | number; value: number; client: string }>,
+  records: PingRecord[],
   metricStats: PingTaskStats[] = [],
 ) {
   const selectedRecords = records.filter((record) => record.task_id === taskId);
@@ -120,11 +122,9 @@ function buildPingOverviewItems(
     else grouped.set(record.client, [record]);
 
     const stats = lossStatsByClient.get(record.client) ?? { total: 0, lost: 0 };
-    stats.total += 1;
-    // 只有 value<0（-1）才是丢包；0 表示往返 <1ms 的成功探测，不能算丢。
-    if (record.value < 0) {
-      stats.lost += 1;
-    }
+    const counts = resolvePingSampleCounts(record);
+    stats.total += counts.total;
+    stats.lost += counts.lost;
     lossStatsByClient.set(record.client, stats);
   }
 
@@ -205,16 +205,31 @@ function buildAssignmentKey(selectedTaskByClient: Map<string, number>) {
     .join("|");
 }
 
-// 单次 overview 请求的硬上限。RPC 传输自带 ~30s 限制，但 HTTP fallback（`apiGet`）
-// 没有超时——没有这个保护，一旦 fallback fetch 卡死就永远不结束，`pingRefreshInFlight`
-// 会一直为 true，把后续所有轮询都卡死。给每个请求加 race 才能保证整条链路能恢复。
+// 限制 RPC 与兼容接口组成的整条回退链，避免一次刷新长期占住轮询。
 const PING_REQUEST_TIMEOUT_MS = 35_000;
+
+interface PreviousPingOverview {
+  assignmentKey: string;
+  items: ReadonlyMap<string, PingOverviewItem>;
+}
+
+function assignedEmptyPing(client: string): PingOverviewItem {
+  return {
+    client,
+    isAssigned: true,
+    lastValue: null,
+    samples: [],
+    max: 1,
+    loss: null,
+  };
+}
 
 async function buildOverviewMap(
   hours: number,
   clientUuids: string[],
   bindings: HomepagePingTaskBindings,
   signal?: AbortSignal,
+  previous?: PreviousPingOverview,
 ): Promise<PingOverviewMapResult> {
   const normalizedUuids = normalizeVisibleUuids(clientUuids);
   if (normalizedUuids.length === 0) {
@@ -229,6 +244,7 @@ async function buildOverviewMap(
   const selectedTaskIds = Array.from(new Set(selectedTaskByClient.values())).sort(
     (left, right) => left - right,
   );
+  const assignmentKey = buildAssignmentKey(selectedTaskByClient);
 
   if (selectedTaskIds.length === 0) {
     return {
@@ -239,22 +255,28 @@ async function buildOverviewMap(
   }
 
   const overviewResults = await Promise.allSettled(
-    selectedTaskIds.map(async (taskId) => {
-      const requestSignal = signalWithTimeout(signal, PING_REQUEST_TIMEOUT_MS);
-      const entityIds = normalizedUuids.filter(
-        (uuid) => selectedTaskByClient.get(uuid) === taskId,
-      );
-      return {
-        taskId,
-        overview: await getPingOverview(hours, taskId, {
-          signal: requestSignal,
-          entityIds,
-        }),
-      };
-    }),
+    selectedTaskIds.map((taskId) =>
+      withTimeoutSignal(
+        async (requestSignal) => {
+          const entityIds = normalizedUuids.filter(
+            (uuid) => selectedTaskByClient.get(uuid) === taskId,
+          );
+          return {
+            taskId,
+            overview: await getPingOverview(hours, taskId, {
+              signal: requestSignal,
+              entityIds,
+            }),
+          };
+        },
+        PING_REQUEST_TIMEOUT_MS,
+        signal,
+      ),
+    ),
   );
 
   const itemsByTask = new Map<number, Map<string, PingOverviewItem>>();
+  const successfulTaskIds = new Set<number>();
   const refreshIntervals: number[] = [];
 
   for (const result of overviewResults) {
@@ -266,6 +288,7 @@ async function buildOverviewMap(
       taskId,
       overview: { records, tasks, stats },
     } = result.value;
+    successfulTaskIds.add(taskId);
     itemsByTask.set(taskId, buildPingOverviewItems(taskId, records, stats));
 
     const taskInterval = tasks.find((task) => task.id === taskId)?.interval;
@@ -274,23 +297,22 @@ async function buildOverviewMap(
 
   const items = new Map<string, PingOverviewItem>();
   for (const [uuid, taskId] of selectedTaskByClient) {
+    if (!successfulTaskIds.has(taskId)) {
+      const previousItem =
+        previous?.assignmentKey === assignmentKey ? previous.items.get(uuid) : undefined;
+      items.set(uuid, previousItem ?? assignedEmptyPing(uuid));
+      continue;
+    }
     const item = itemsByTask.get(taskId)?.get(uuid);
     if (item) {
       items.set(uuid, item);
       continue;
     }
-    items.set(uuid, {
-      client: uuid,
-      isAssigned: true,
-      lastValue: null,
-      samples: [],
-      max: 1,
-      loss: null,
-    });
+    items.set(uuid, assignedEmptyPing(uuid));
   }
 
   return {
-    assignmentKey: buildAssignmentKey(selectedTaskByClient),
+    assignmentKey,
     intervalMs:
       refreshIntervals.length > 0
         ? Math.min(...refreshIntervals)
@@ -426,6 +448,7 @@ async function refreshPingOverview() {
       scheduledVisibleUuids,
       scheduledBindings,
       signal,
+      pingOverviewState,
     );
     if (isCurrent()) {
       commitPingOverview(next.assignmentKey, next.intervalMs, next.items);
@@ -468,6 +491,8 @@ function ensurePingOverviewStarted(
     scheduledVisibleKey = visibleKey;
     scheduledBindings = bindings;
     scheduledBindingsKey = bindingsKey;
+
+    pingAbortController?.abort();
 
     if (pingRefreshTimer != null) {
       window.clearTimeout(pingRefreshTimer);
@@ -561,7 +586,11 @@ export function usePingBuckets(
   return useMemo(() => {
     const now = Date.now();
     const totalWindowMs = 60 * 60 * 1000;
-    const resolvedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
+    const requestedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
+    const resolvedCount =
+      Number.isFinite(requestedCount) && requestedCount > 0
+        ? Math.min(240, Math.max(1, Math.round(requestedCount)))
+        : MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
     const bucketMs = totalWindowMs / resolvedCount;
     const windowStart = now - bucketMs * resolvedCount;
     const totals = new Array<number>(resolvedCount).fill(0);
@@ -576,13 +605,8 @@ export function usePingBuckets(
       if (bucketIndex < 0) continue;
       if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
 
-      const sampleCount = Math.max(1, Math.round(sample.count ?? 1));
-      const sampleLost = sample.loss != null
-        ? Math.min(sampleCount, Math.max(0, Math.round((sample.loss / 100) * sampleCount)))
-        : sample.value < 0
-          ? sampleCount
-          : 0;
-      const sampleValid = sampleCount - sampleLost;
+      const { total: sampleCount, lost: sampleLost, valid: sampleValid } =
+        resolvePingSampleCounts(sample);
 
       totals[bucketIndex] += sampleCount;
       losts[bucketIndex] += sampleLost;

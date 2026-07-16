@@ -32,6 +32,37 @@ describe("fillMissingMetricPoints", () => {
     expect(filled.map((p) => p.time)).toEqual([0, 10, 20]);
     expect(filled[filled.length - 1].v).toBe(3);
   });
+
+  it("keeps a trailing sample outside the final grid tolerance", () => {
+    const points: TimedMetricPoint[] = [
+      { time: 0, v: 1 },
+      { time: 10, v: 2 },
+      { time: 20, v: 3 },
+      { time: 36, v: 4 },
+    ];
+
+    const filled = fillMissingMetricPoints(points, {
+      intervalSeconds: 10,
+      matchToleranceSeconds: 5,
+    });
+
+    expect(filled.map((point) => point.time)).toEqual([0, 10, 20, 30, 36]);
+    expect(filled[filled.length - 1].v).toBe(4);
+  });
+
+  it("prefers an exact trailing sample over an earlier point snapped to the same grid time", () => {
+    const filled = fillMissingMetricPoints(
+      [
+        { time: 0, v: 1 },
+        { time: 10, v: 2 },
+        { time: 16, v: 3 },
+        { time: 20, v: 4 },
+      ],
+      { intervalSeconds: 10, matchToleranceSeconds: 5 },
+    );
+
+    expect(filled[filled.length - 1]).toMatchObject({ time: 20, v: 4 });
+  });
 });
 
 describe("cutPeakValues", () => {

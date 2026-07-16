@@ -30,7 +30,7 @@ type JsonRpcResponse<TResult = unknown> =
   | JsonRpcFailure;
 
 type PendingRequest = {
-  resolve: (value: any) => void;
+  resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   timeout: number;
 };
@@ -45,8 +45,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const RECONNECT_INTERVAL_MS = 3_000;
 const MAX_RECONNECT_INTERVAL_MS = 30_000;
 
-// 服务端返回的 JSON-RPC 错误*响应*(请求已送达并被处理),区别于传输失败。调用方不能
-// 把它再用 HTTP 重试,否则服务端会重复处理同一个请求。
+// 服务端 RPC 错误不可再用 HTTP 重试，否则可能重复处理请求。
 class RpcResponseError extends Error {
   constructor(
     message: string,
@@ -86,9 +85,9 @@ class RPC2Client {
       try {
         return await this.callViaWebSocket<TParams, TResult>(method, params, options);
       } catch (error) {
-        // 只在传输失败时兜底到 HTTP。RPC 错误响应意味着服务端已经处理(并拒绝)了这个
-        // 请求,用 HTTP 重试会重复处理并掩盖真正的错误。
+        // 服务端已拒绝的 RPC 不能再用 HTTP 重试。
         if (error instanceof RpcResponseError) throw error;
+        if (options.signal?.aborted) throw error;
         return await this.callViaHttp<TParams, TResult>(method, params, options);
       }
     }
@@ -103,8 +102,6 @@ class RPC2Client {
     });
   }
 
-  // 清掉所有 timer、socket 和 pending 请求。HMR dispose 时用,避免旧 client 的
-  // heartbeat/reconnect 循环和新导入的模块并存运行。
   close() {
     this.closed = true;
     this.stopHeartbeat();
@@ -117,9 +114,7 @@ class RPC2Client {
       this.ws.onclose = null;
       try {
         this.ws.close();
-      } catch {
-        /* noop */
-      }
+      } catch {}
       this.ws = null;
     }
     this.state = "disconnected";
@@ -141,9 +136,7 @@ class RPC2Client {
         this.state = "error";
         try {
           ws.close();
-        } catch {
-          /* noop */
-        }
+        } catch {}
         reject(new Error("RPC2 WebSocket connection timed out"));
       }, 10_000);
 
@@ -156,6 +149,14 @@ class RPC2Client {
 
       const handleOpen = () => {
         cleanup();
+        if (this.closed) {
+          this.state = "disconnected";
+          try {
+            ws.close();
+          } catch {}
+          reject(new Error("RPC2 client closed during connect"));
+          return;
+        }
         this.state = "connected";
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -165,13 +166,11 @@ class RPC2Client {
       const handleError = () => {
         cleanup();
         this.state = "error";
+        this.scheduleReconnect();
         reject(new Error("RPC2 WebSocket connection failed"));
       };
 
-      // 握手期间的正常关闭(proxy/LB 接受后又断开、WS 层鉴权拒绝)只触发 "close" 不触发
-      // "error",没有这个处理 connect promise 会一直挂到 10s 超时 —— 而 scheduleReconnect
-      // 下次 connect() 又会拿到这个卡住的 promise,导致恢复停滞。在这里立即 reject 让 promise
-      // 结算;常驻的 onclose handler(下面挂的)仍会跑 scheduleReconnect。
+      // 握手关闭可能没有 error 事件，需立即结算 promise 以允许重连。
       const handleConnectClose = () => {
         cleanup();
         this.state = "error";
@@ -191,6 +190,7 @@ class RPC2Client {
 
   private attachSocketHandlers(ws: WebSocket) {
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
       try {
         const payload = JSON.parse(String(event.data)) as JsonRpcResponse;
         this.handleMessage(payload);
@@ -200,6 +200,7 @@ class RPC2Client {
     };
 
     ws.onclose = () => {
+      if (this.ws !== ws) return;
       this.stopHeartbeat();
       this.ws = null;
       this.state = "disconnected";
@@ -207,8 +208,7 @@ class RPC2Client {
       this.scheduleReconnect();
     };
 
-    // 不设 onerror:传输错误后必定跟一个 close 事件,onclose 已经负责 state + reconnect。
-    //(握手期间由 connect promise 自己的一次性 error listener 负责 reject。)
+    // 握手后的传输错误由 close 事件统一处理。
   }
 
   private handleMessage(payload: JsonRpcResponse) {
@@ -276,8 +276,6 @@ class RPC2Client {
 
       signal?.addEventListener("abort", onAbort, { once: true });
 
-      // 包一层 settle:正常响应(在 handleMessage 处理)或传输层 reject 时,也一并摘掉
-      // abort listener 和 timer。
       this.pending.set(id, {
         resolve: (value) => {
           cleanup();
@@ -333,7 +331,10 @@ class RPC2Client {
 
     const payload = (await response.json()) as JsonRpcResponse<TResult>;
     if ("error" in payload) {
-      throw new Error(payload.error.message || `RPC Error ${payload.error.code ?? "unknown"}`);
+      throw new RpcResponseError(
+        payload.error.message || `RPC Error ${payload.error.code ?? "unknown"}`,
+        payload.error.code,
+      );
     }
 
     return payload.result;
@@ -351,9 +352,7 @@ class RPC2Client {
             params: { timestamp: Date.now() },
           } satisfies JsonRpcRequest<{ timestamp: number }>),
         );
-      } catch {
-        /* noop */
-      }
+      } catch {}
     }, HEARTBEAT_INTERVAL_MS);
   }
 
@@ -367,9 +366,7 @@ class RPC2Client {
   private scheduleReconnect() {
     if (this.closed || this.reconnectTimer) return;
 
-    // 指数退避,上限 MAX_RECONNECT_INTERVAL_MS,无限重试。旧代码 5 次后彻底停止,再加上
-    // call() 在 disconnected 时 autoConnect,结果要么是无节流的 ~2s 重连风暴,要么完全不
-    // 恢复。reconnectAttempts 在成功 open 后归零。
+    // 指数退避并持续重试，连接成功后归零。
     this.state = "reconnecting";
     const delay = Math.min(
       RECONNECT_INTERVAL_MS * 2 ** this.reconnectAttempts,

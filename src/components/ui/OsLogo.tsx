@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 
 interface OsConfig {
   name: string;
@@ -177,8 +177,6 @@ const DEFAULT_OS_CONFIG: OsConfig = {
   keywords: ["unknown"],
 };
 
-// 按单词边界匹配关键词,而不是裸子串。子串匹配会严重误判:"darwin"(macOS uname)含 "win"→Windows、
-// "unix" 含 "nix"→NixOS 等。每个 OS 预编译一个 \b 锚定的 alternation 既能避免误判,又支持 "red hat" 这种多词关键词。
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -216,9 +214,6 @@ export function resolveOsInfo(value?: string | null) {
   };
 }
 
-// memo:两个调用点(NodeCard/CompactNodeCard 的 Header)都在每 ~1s metrics tick 重渲染,
-// 而 props 均为原始类型且 node.os 几乎不变——不 memo 就会每卡每秒白跑 resolveOsInfo 的
-// 整套 OS_MATCHERS 正则匹配。props 稳定时这层直接跳过。
 export const OsLogo = memo(function OsLogo({
   value,
   size = 18,
@@ -227,12 +222,8 @@ export const OsLogo = memo(function OsLogo({
   size?: number;
 }) {
   const os = resolveOsInfo(value);
-  // 某个 OS logo 文件缺失时回退到默认 Linux logo,这样冷门或拼错的 OS 字符串也能显示真图标而不是裂图
-  const [errored, setErrored] = useState(false);
-  useEffect(() => {
-    setErrored(false);
-  }, [os.image]);
-  const src = errored ? DEFAULT_OS_CONFIG.image : os.image;
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const src = failedImage === os.image ? DEFAULT_OS_CONFIG.image : os.image;
 
   return (
     <img
@@ -245,7 +236,7 @@ export const OsLogo = memo(function OsLogo({
       loading="lazy"
       draggable={false}
       onError={() => {
-        if (!errored) setErrored(true);
+        if (src !== DEFAULT_OS_CONFIG.image) setFailedImage(os.image);
       }}
       style={{ "--os-logo-size": `${size}px` } as React.CSSProperties}
     />

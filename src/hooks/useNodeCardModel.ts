@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useFakePingFallback } from "@/hooks/useFakePing";
-import { useNodeMeta, useNodeMetrics, useNodeTrafficTrend } from "@/hooks/useNode";
+import { useHourlyClock } from "@/hooks/useClock";
+import { useNodeCardSnapshots } from "@/hooks/useNode";
 import { useNodePingOverview, usePingBuckets } from "@/hooks/usePingOverview";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { formatRenewalPrice } from "@/utils/billing";
@@ -13,28 +14,31 @@ import {
   joinDisplayParts,
   parseTags,
 } from "@/utils/format";
-import { latencyHeatColor, lossHeatColor, trafficUsageColor } from "@/utils/metricTone";
+import {
+  latencyHeatColor,
+  lossHeatColor,
+  trafficUsageColor,
+} from "@/utils/metricTone";
 import { resolveTrafficUsage, trafficTypeLabel, type TrafficDisplay } from "@/utils/traffic";
 import { resolveOsInfo } from "@/components/ui/OsLogo";
 
 export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
-  const meta = useNodeMeta(uuid);
-  const metrics = useNodeMetrics(uuid);
-  const trafficTrend = useNodeTrafficTrend(uuid);
+  const { meta, metrics, trafficTrend } = useNodeCardSnapshots(uuid);
   const realPing = useNodePingOverview(uuid);
-  const showCardGroup = useThemeSettings().showCardGroup;
-  // 未绑定首页 Ping 的在线节点按主题开关回退到模拟延迟(见 useFakePingFallback)。
-  // 在这里替换意味着 NodeCard/CompactNodeCard 及下游的颜色、分桶全部自动生效。
-  const ping = useFakePingFallback(uuid, realPing, metrics?.online === true);
+  const { showCardGroup, fakePingForUnbound, homepagePingBindings } = useThemeSettings();
+  const now = useHourlyClock();
+  const ping = useFakePingFallback(
+    uuid,
+    realPing,
+    metrics?.online === true,
+    fakePingForUnbound,
+    homepagePingBindings,
+  );
   const pingBuckets = usePingBuckets(ping, pingBucketCount);
 
-  // meta 派生字段（tag 解析、到期、续费价、OS 查询）只在 meta 变化时才变（很少），
-  // 不能每秒 metrics 刷新都重算，所以单独用一个只依赖 meta 的 memo。
   const metaModel = useMemo(() => {
     if (!meta) return null;
     const tags = parseTags(meta.tags);
-    // showCardGroup 关闭时,卡片内不显示节点分组名:既从副标题剔除 group(保留备注),
-    // 也不再用 group 作无 tags 时的兜底 chip。分组筛选栏(showGroupTabs)不受影响。
     const group = showCardGroup ? meta.group : undefined;
     const subtitleParts = [group, meta.public_remark]
       .map((part) => part?.trim())
@@ -54,13 +58,13 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       footerTags: fallbackFooterTags,
       compactFooterTags,
       subtitle: joinDisplayParts(subtitleParts),
-      expire: formatExpireDays(meta.expired_at),
-      expireColor: getExpireTextColor(meta.expired_at),
+      expire: formatExpireDays(meta.expired_at, now),
+      expireColor: getExpireTextColor(meta.expired_at, now),
       renewalPrice: formatRenewalPrice(meta),
       osName: resolveOsInfo(meta.os).name,
       loadBaseline: meta.cpu_cores > 0 ? meta.cpu_cores : 4,
     };
-  }, [meta, showCardGroup]);
+  }, [meta, now, showCardGroup]);
 
   // ping 派生的颜色只在 ping item 变化时才变。
   const pingModel = useMemo(
@@ -96,11 +100,12 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
     // 不限量时渲染成 ∞，让剩余值和"已用/上限"那行与限量情况保持一致
     //（"剩余 ∞" + "2.73 GB / ∞"）。
     const trafficLimitLabel = trafficUsage.unlimited ? "∞" : formatBytes(trafficUsage.limit);
+    const trafficColor = trafficUsage.unlimited
+      ? "var(--status-success)"
+      : trafficUsageColor(trafficUsage.fraction);
     const traffic: TrafficDisplay = {
       fraction: trafficUsage.fraction,
-      color: trafficUsage.unlimited
-        ? "var(--status-success)"
-        : trafficUsageColor(trafficUsage.fraction),
+      color: trafficColor,
       remainingLabel: trafficUsage.unlimited ? "∞" : formatBytes(trafficUsage.remaining),
       detail: `${trafficUsedLabel} / ${trafficLimitLabel}`,
       typeLabel: trafficTypeLabel(meta.traffic_limit_type),

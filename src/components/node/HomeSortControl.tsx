@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowDownWideNarrow, ArrowUpNarrowWide } from "lucide-react";
 import {
   HOME_SORT_FIELDS,
@@ -8,8 +8,7 @@ import {
 } from "@/utils/homeSort";
 import type { HomeSortControlState } from "@/hooks/useHomeSort";
 
-// 一个随方向变化的「排序」图标:升序=由小到大、降序=由大到小。一个图标同时表达排序与方向,
-// 不再额外堆箭头。
+// 单个图标同时表达排序与方向。
 function SortIcon({ direction, size = 14 }: { direction: HomeSortDirection; size?: number }) {
   return direction === "asc" ? (
     <ArrowUpNarrowWide size={size} aria-hidden />
@@ -18,25 +17,28 @@ function SortIcon({ direction, size = 14 }: { direction: HomeSortDirection; size
   );
 }
 
-// 首页排序控件:触发钮(排序图标 + 当前维度)→ 点开弹层单选维度。点选中维度=翻转方向(图标随之
-// 变),点别的维度=切过去(用该维度自然方向)。单钮弹层,桌面/移动一致。
+// 选择当前维度会翻转方向，选择其他维度会采用该维度的自然方向。
 export function HomeSortControl({ state }: { state: HomeSortControlState }) {
   const { field, direction, setField, toggleDirection } = state;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelId = useId();
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
     };
-    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
@@ -49,21 +51,21 @@ export function HomeSortControl({ state }: { state: HomeSortControlState }) {
   return (
     <div className="home-sort" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="home-sort-trigger"
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label="排序方式"
-        title="排序方式"
+        aria-controls={open ? panelId : undefined}
+        aria-label={`排序方式，当前${HOME_SORT_FIELD_LABELS[field]}${direction === "asc" ? "升序" : "降序"}`}
+        title={`排序：${HOME_SORT_FIELD_LABELS[field]}（${direction === "asc" ? "升序" : "降序"}）`}
         onClick={() => setOpen((value) => !value)}
       >
         <SortIcon direction={direction} />
         <span className="home-sort-trigger-label">{HOME_SORT_FIELD_LABELS[field]}</span>
       </button>
       {open && (
-        // 普通 popover:一组原生按钮,Tab 移焦、Enter/Space 触发、Esc 关闭、点外部关闭。
-        // 不标 listbox(那需要 roving focus + 方向键),用 aria-current 标当前排序即可。
-        <div className="home-sort-panel" role="group" aria-label="排序方式">
+        <div id={panelId} className="home-sort-panel" role="group" aria-label="排序方式">
           {HOME_SORT_FIELDS.map((option) => {
             const active = option === field;
             return (

@@ -7,7 +7,6 @@ import type { PingOverviewBucket } from "@/types/komari";
 const ACTIVE_BAR_HEIGHT = 0.84;
 
 interface QualityBarsProps {
-  /** 聚合后的 ping 分桶(始终是定长窗口)。 */
   buckets: PingOverviewBucket[];
   redrawKey?: string;
   onHoverIndex?: (index: number | null) => void;
@@ -15,18 +14,20 @@ interface QualityBarsProps {
 
 export function QualityBars({ buckets, redrawKey, onHoverIndex }: QualityBarsProps) {
   const bars = useMemo(
-    () =>
-      buckets.map((bucket) => {
+    () => {
+      // CSS 色变化时需要重新解析预计算的 canvas 色值。
+      void redrawKey;
+      return buckets.map((bucket) => {
         const hasBucketValue =
           bucket.loss != null && Number.isFinite(bucket.loss) && bucket.total > 0;
         return {
           active: hasBucketValue,
           index: bucket.index,
-          // 在这里(按桶、数据变化时)归一化成 canvas 安全色,而不是每次重绘对每根柱子算。
           tone: safeCanvasColor(hasBucketValue ? lossHeatColor(bucket.loss) : "var(--progress-bg)"),
         };
-      }),
-    [buckets],
+      });
+    },
+    [buckets, redrawKey],
   );
 
   const getHoverIndex = useCallback(

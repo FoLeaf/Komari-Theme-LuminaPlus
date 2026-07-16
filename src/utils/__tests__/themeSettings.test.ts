@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { normalizeThemeSettings } from "@/utils/themeSettings";
 
 describe("normalizeThemeSettings", () => {
+  it("falls removed or unknown saved view modes back to compact", () => {
+    const settings = normalizeThemeSettings({
+      desktopNodeViewMode: "retired-view",
+      mobileNodeViewMode: "retired-view",
+    } as never);
+
+    expect(settings.desktopNodeViewMode).toBe("compact");
+    expect(settings.mobileNodeViewMode).toBe("compact");
+    expect(normalizeThemeSettings({ mobileNodeViewMode: "list" }).mobileNodeViewMode).toBe(
+      "compact",
+    );
+  });
+
   it("defaults overview ratings on unless explicitly disabled", () => {
     expect(normalizeThemeSettings({}).showOverviewRatings).toBe(true);
     expect(normalizeThemeSettings({ showOverviewRatings: false }).showOverviewRatings).toBe(false);

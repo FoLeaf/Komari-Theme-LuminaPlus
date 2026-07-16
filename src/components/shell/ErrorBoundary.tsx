@@ -36,11 +36,11 @@ function buildDiagnostics(error: unknown, mode: string): string {
   ].join("\n");
 }
 
-function copyDiagnostics(text: string) {
+async function copyDiagnostics(text: string) {
   try {
-    void navigator.clipboard?.writeText(text);
+    await navigator.clipboard?.writeText(text);
   } catch {
-    // 剪贴板可能不可用(非安全上下文/老浏览器),文本仍显示在 <pre> 里可手动选择
+    // 文本仍保留在页面中，可手动复制。
   }
 }
 
@@ -93,7 +93,7 @@ function ErrorFallback({
             <button
               type="button"
               className="theme-error-button"
-              onClick={() => copyDiagnostics(diagnostics)}
+              onClick={() => void copyDiagnostics(diagnostics)}
             >
               复制诊断信息
             </button>

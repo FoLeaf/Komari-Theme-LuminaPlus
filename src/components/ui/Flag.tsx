@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { getDisplayRegionCode } from "@/utils/geo";
 
 interface FlagProps {
@@ -8,11 +8,7 @@ interface FlagProps {
 
 export function Flag({ region, size = 14 }: FlagProps) {
   const value = region?.trim() ?? "";
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  useEffect(() => {
-    setLoadFailed(false);
-  }, [value]);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (!value) {
     return (
@@ -32,10 +28,11 @@ export function Flag({ region, size = 14 }: FlagProps) {
   const src = `/assets/flags/${flagCode}.svg`;
   const alt = `地区旗帜: ${flagCode}`;
 
-  if (loadFailed) {
+  if (failedSrc === src) {
     return (
       <span
-        aria-hidden
+        role="img"
+        aria-label={alt}
         className="inline-block rounded-[3px] shrink-0"
         title={alt}
         style={{
@@ -50,7 +47,6 @@ export function Flag({ region, size = 14 }: FlagProps) {
   return (
     <span
       className="inline-flex items-center shrink-0"
-      aria-label={alt}
       style={{
         width: size + 8,
         height: size,
@@ -67,7 +63,7 @@ export function Flag({ region, size = 14 }: FlagProps) {
           objectFit: "contain",
           display: "block",
         }}
-        onError={() => setLoadFailed(true)}
+        onError={() => setFailedSrc(src)}
       />
     </span>
   );

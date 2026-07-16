@@ -116,6 +116,14 @@ export function fillMissingMetricPoints(
   const matchToleranceSeconds = options?.matchToleranceSeconds ?? intervalSeconds / 2;
   const base = Object.fromEntries(keys.map((key) => [key, null] as const));
   const filled: TimedMetricPoint[] = [];
+  const appendUnmatched = (point: TimedMetricPoint) => {
+    const previous = filled[filled.length - 1];
+    if (!previous || point.time > previous.time) {
+      filled.push({ ...base, ...point });
+    } else if (point.time === previous.time) {
+      filled[filled.length - 1] = { ...previous, ...point };
+    }
+  };
   const start = sortedPoints[0].time;
   const end = sortedPoints[sortedPoints.length - 1].time;
   let pointer = 0;
@@ -125,6 +133,7 @@ export function fillMissingMetricPoints(
       pointer < sortedPoints.length &&
       sortedPoints[pointer].time < current - matchToleranceSeconds
     ) {
+      appendUnmatched(sortedPoints[pointer]);
       pointer += 1;
     }
 
@@ -146,6 +155,11 @@ export function fillMissingMetricPoints(
     if (matched) {
       pointer += 1;
     }
+  }
+
+  while (pointer < sortedPoints.length) {
+    appendUnmatched(sortedPoints[pointer]);
+    pointer += 1;
   }
 
   return filled;

@@ -5,28 +5,26 @@ import { latencyHeatColor } from "@/utils/metricTone";
 import type { PingOverviewBucket } from "@/types/komari";
 
 interface LatencyBarsProps {
-  /** 聚合后的延迟分桶(始终是定长窗口)。 */
   buckets: PingOverviewBucket[];
-  /** 归一化到 0..1 的分母(窗口内的最大延迟)。 */
   max: number;
   redrawKey?: string;
   height?: number;
   onHoverIndex?: (index: number | null) => void;
 }
 
-/** 由聚合 ping 分桶驱动、像素对齐的延迟柱状图。 */
 export function LatencyBars({ buckets, max, redrawKey, height = 16, onHoverIndex }: LatencyBarsProps) {
   const bars = useMemo(
-    () =>
-      buckets.map((bucket) => ({
+    () => {
+      // CSS 色变化时需要重新解析预计算的 canvas 色值。
+      void redrawKey;
+      return buckets.map((bucket) => ({
         value: bucket.value ?? 0,
-        // value 非 null(含 0=亚毫秒成功)即有有效延迟;null 表示无样本或全丢包,画成空槽。
         has: bucket.value != null,
         index: bucket.index,
-        // 在这里(按桶、数据变化时)归一化成 canvas 安全色,而不是每次重绘对每根柱子算。
         tone: safeCanvasColor(latencyHeatColor(bucket.value)),
-      })),
-    [buckets],
+      }));
+    },
+    [buckets, redrawKey],
   );
 
   const getHoverIndex = useCallback(
@@ -37,8 +35,6 @@ export function LatencyBars({ buckets, max, redrawKey, height = 16, onHoverIndex
     [bars],
   );
 
-  // 除非分桶数据(bars)或刻度(max)变化,否则保持稳定,这样 canvas 不会在父组件
-  // 每个 metrics tick 都重绘——只在 ping 刷新时重绘。
   const draw = useCallback(
     (ctx: CanvasRenderingContext2D, width: number, height: number) => {
       const inactiveColor = safeCanvasColor("var(--progress-bg)");

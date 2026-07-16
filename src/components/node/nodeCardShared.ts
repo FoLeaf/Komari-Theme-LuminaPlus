@@ -1,15 +1,13 @@
-// NodeCard、CompactNodeCard 之间共享的非视觉逻辑。两张卡刻意用不同的 class
-// 名和布局,所以 markup 不共享——只共享逻辑和文案,否则改一处另一处会漂移。
+// 大卡与紧凑卡共享的格式化和命中逻辑。
 
-import { trimFixed } from "@/utils/format";
+import { formatUptimeDays, trimFixed } from "@/utils/format";
 
 /** 卡片标签行的完整 tag 列表 tooltip(几种卡片布局共用同一文案)。 */
 export function joinTagTitle(tags: { label: string }[]) {
   return tags.map((tag) => tag.label).join(" / ");
 }
 
-/** 卡片指标百分比的展示格式:≥10% 取整,否则保留 1 位小数。紧凑卡使用这套精度规则,
- * 避免同一节点在不同卡片上因四舍五入方式不同而数字不一致。 */
+/** ≥10% 取整，否则保留一位小数。 */
 export function formatCompactPercent(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0%";
   if (value >= 10) return `${Math.round(value)}%`;
@@ -22,30 +20,21 @@ export function formatCompactExpire({ value, unit }: { value: string; unit: stri
   return unit ? `余 ${value}${unit}` : value;
 }
 
-/** 卡片在线时长文案,离线或秒数非法时返回空串(调用方据此跳过整行渲染)。 */
+/** 非法或非正时长返回空串。 */
 export function formatCompactUptime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
-  const days = seconds / 86400;
-  const value = days >= 1 ? Math.floor(days).toString() : trimFixed(days, 2);
-  return `在线：${value}天`;
+  const uptime = formatUptimeDays(seconds);
+  return `在线：${uptime.value}${uptime.unit}`;
 }
 
-/**
- * 卡片首页 ping 区块的空状态文案。绑定了首页 Ping 任务但还没有成功样本的节点显示
- * "无样本";未绑定的节点显示"未配置"。共享以防 NodeCard 和 CompactNodeCard 措辞
- * 漂移。`title` 是较长的标题形式(仅 NodeCard 用);`text` 是两张卡都用的内联占位符。
- */
+/** 区分已绑定但无样本与未配置 Ping。 */
 export function pingEmptyLabels(hasHomepagePingBinding: boolean): { title: string; text: string } {
   return hasHomepagePingBinding
     ? { title: "暂无有效样本", text: "无样本" }
     : { title: "未配置首页 Ping", text: "未配置" };
 }
 
-/**
- * 列表档"系统"列文案:干净的发行版名(osName)拼上原始 os 串里的第一个版本号,得到
- * 形如「Debian 12」「Ubuntu 22.04」的短标签。版本号截到 major.minor,不罗列 patch/代号
- * (原始串常是 "Debian GNU/Linux 12 (bookworm)" 这种);没有版本号时只显示发行版名。
- */
+/** 生成“Debian 12”这类简短系统标签。 */
 export function formatOsLabel(osName: string, rawOs?: string | null): string {
   if (!rawOs) return osName;
   const match = rawOs.match(/\d+(?:\.\d+)?/);
@@ -60,12 +49,7 @@ export function nodeDetailLinkLabels(name: string, osName: string) {
   };
 }
 
-/**
- * 流量/配额条"至少给点视觉提示"的下限比例,以"一段的几分之几"表达(两张卡都是 18 段)。
- * 用量非零但极小时,以前是直接点亮/填满整段(1/18≈5.6%),把 0.01% 的用量夸张成 5.6%；
- * 现在改成只点亮一段的这个比例(段内一道细边),既能看出"用过一点",又不会失真。
- * 大卡(离散 span)和小卡(单元素渐变遮罩)实现方式不同,但共用这同一个比例语义。
- */
+/** 极小但非零流量只显示一段内的细提示，避免夸大用量。 */
 export const TRAFFIC_SLIVER_RATIO = 0.1;
 
 // LatencyBars(延迟)和 QualityBars(丢包)共享的柱状条几何/命中检测。两者都渲染

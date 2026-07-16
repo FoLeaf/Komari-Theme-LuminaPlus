@@ -754,8 +754,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .assets-hero-value,
-  .assets-hero-sub,
-  .assets-ledger-row {
+  .assets-ledger-row,
+  .cost-summary-action.is-spinning svg {
     animation: none;
   }
 }

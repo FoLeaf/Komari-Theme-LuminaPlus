@@ -28,10 +28,23 @@ import {
 import {
   mergePingMetricSeries,
   pingTasksFromMetricStats,
+  reconcilePingMetricStats,
   PING_LATENCY_METRIC,
   PING_LOSS_METRIC,
   type PingMetricSeries,
 } from "@/utils/pingMetrics";
+import {
+  fillMetricBoundaryGaps,
+  getMetricBoundaryRepairRange,
+  hasMetricBoundaryGap,
+  type MetricBoundaryAggregation,
+  type MetricBoundarySeries,
+} from "@/utils/metricBoundaryRepair";
+import {
+  TODAY_TRAFFIC_AGGREGATION,
+  TODAY_TRAFFIC_METRIC_KEYS,
+  type TrafficMetricSeries,
+} from "@/utils/trafficStats";
 
 const ApiEnvelope = <T extends z.ZodTypeAny>(inner: T) =>
   z.object({
@@ -130,6 +143,12 @@ interface PingOverviewResponse {
 interface RequestRange {
   rangeStartMs: number;
   rangeEndMs: number;
+}
+
+interface ApiCallOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+  skipMetricQuery?: boolean;
 }
 
 export class ApiRequestError extends Error {
@@ -270,8 +289,9 @@ function normalizeRpcLoadRecords(
   range?: RequestRange,
 ): LoadRecordsResponse {
   const records = parseArrayLenient(LoadRecordSchema, extractRpcRecords(payload, uuid));
+  const count = payload.count;
   return {
-    count: payload.count || records.length,
+    count: typeof count === "number" && Number.isFinite(count) && count > 0 ? count : records.length,
     records,
     intervalSeconds: inferHistoryIntervalSeconds(records),
     ...range,
@@ -301,8 +321,9 @@ function normalizeRpcPingRecords(
   const records = parseArrayLenient(PingRecordSchema, extractRpcRecords(payload, uuid));
   const parsedTasks = z.array(PingTaskSchema).safeParse(payload.tasks);
   const tasks = parsedTasks.success ? parsedTasks.data : derivePingTasks(records);
+  const count = payload.count;
   return {
-    count: payload.count || records.length,
+    count: typeof count === "number" && Number.isFinite(count) && count > 0 ? count : records.length,
     records,
     tasks,
     ...range,
@@ -327,12 +348,6 @@ let publicPingTasksCache: PingTask[] | null = null;
 let publicPingTasksCachedAt = 0;
 let publicPingTasksRequest: Promise<PingTask[]> | null = null;
 
-function isAbortError(error: unknown) {
-  return error instanceof DOMException
-    ? error.name === "AbortError"
-    : error instanceof Error && error.name === "AbortError";
-}
-
 function isMissingMetricMethod(error: unknown) {
   if (!(error instanceof Error)) return false;
   return /method.*(?:not found|unknown|registered)|(?:not found|unknown).*method/i.test(
@@ -343,6 +358,7 @@ function isMissingMetricMethod(error: unknown) {
 async function queryMetricPayload(
   params: Record<string, unknown>,
   signal?: AbortSignal,
+  timeout?: number,
 ): Promise<z.output<typeof MetricQueryResponseSchema>> {
   if (metricQueryApiUnavailable) {
     throw new Error("Metric query API is unavailable on this server");
@@ -353,11 +369,11 @@ async function queryMetricPayload(
       "public:queryMetrics",
       params,
       MetricQueryResponseSchema,
-      { signal },
+      { signal, timeout },
     );
     return payload as z.output<typeof MetricQueryResponseSchema>;
   } catch (error) {
-    if (signal?.aborted || isAbortError(error)) throw error;
+    if (signal?.aborted) throw error;
     if (isMissingMetricMethod(error)) metricQueryApiUnavailable = true;
     throw error;
   }
@@ -415,23 +431,86 @@ function normalizePingMetricStats(
   return out;
 }
 
+type MetricPayloadSeries = z.output<typeof MetricSeriesSchema>;
+
+function rawMetricPoints(item: MetricPayloadSeries) {
+  return item.points.map((point) => ({
+    ...point,
+    count: point.value == null ? 0 : 1,
+  }));
+}
+
+async function repairMetricBoundary<T extends MetricBoundarySeries>(
+  aggregateSeries: T[],
+  metricPayload: z.output<typeof MetricQueryResponseSchema>,
+  requestRange: RequestRange,
+  rawParams: Record<string, unknown>,
+  mapRawSeries: (item: MetricPayloadSeries, intervalSeconds: number) => T,
+  aggregationByMetric: Partial<Record<string, MetricBoundaryAggregation>> = {},
+  signal?: AbortSignal,
+  timeout?: number,
+) {
+  const payloadRange = getMetricPayloadRange(metricPayload, requestRange);
+  const repairRange = getMetricBoundaryRepairRange(
+    payloadRange.rangeStartMs,
+    payloadRange.rangeEndMs,
+  );
+  if (!repairRange || !hasMetricBoundaryGap(aggregateSeries, repairRange)) {
+    return aggregateSeries;
+  }
+
+  try {
+    const rawPayload = await queryMetricPayload(
+      {
+        ...rawParams,
+        start: new Date(repairRange.startMs).toISOString(),
+        end: new Date(repairRange.endMs).toISOString(),
+        downsample: false,
+        fill_empty: false,
+      },
+      signal,
+      timeout,
+    );
+    const fallbackInterval = Math.max(
+      0,
+      ...aggregateSeries.map((item) => item.intervalSeconds ?? 0),
+    );
+    const rawSeries = rawPayload.series.map((item) =>
+      mapRawSeries(item, fallbackInterval),
+    );
+    return fillMetricBoundaryGaps(
+      aggregateSeries,
+      rawSeries,
+      aggregationByMetric,
+    ).series;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return aggregateSeries;
+  }
+}
+
 async function getLoadMetricData(
   uuid: string,
   hours: number,
+  signal?: AbortSignal,
 ): Promise<LoadRecordsResponse> {
   const requestRange = createRequestRange(hours);
-  const metricPayload = await queryMetricPayload({
-    hours,
-    entity_ids: [uuid],
-    metric_keys: LOAD_METRIC_KEYS,
-    max_points: DETAIL_METRIC_MAX_POINTS,
-    aggregation: "avg",
-    aggregation_by_metric: LOAD_LAST_AGGREGATION,
-    fill_empty: false,
-  });
+  const metricPayload = await queryMetricPayload(
+    {
+      hours,
+      entity_ids: [uuid],
+      metric_keys: LOAD_METRIC_KEYS,
+      max_points: DETAIL_METRIC_MAX_POINTS,
+      aggregation: "avg",
+      aggregation_by_metric: LOAD_LAST_AGGREGATION,
+      fill_empty: false,
+    },
+    signal,
+  );
   const series: LoadMetricSeries[] = metricPayload.series.map((item) => ({
     metricKey: item.metric_key,
     client: item.entity_id,
+    intervalSeconds: item.interval_seconds,
     points: item.points,
   }));
   const records = mergeLoadMetricSeries(series);
@@ -452,12 +531,16 @@ async function getPingMetricData({
   entityIds,
   taskId,
   maxPoints,
+  includeStats = false,
+  repairBoundary = false,
   signal,
 }: {
   hours: number;
   entityIds?: string[];
   taskId?: number;
   maxPoints: number;
+  includeStats?: boolean;
+  repairBoundary?: boolean;
   signal?: AbortSignal;
 }): Promise<PingRecordsResponse> {
   if (metricQueryApiUnavailable) {
@@ -472,18 +555,19 @@ async function getPingMetricData({
     max_points: maxPoints,
   };
 
-  const statsRequest = rpcCall(
-    "public:getPingMetricStats",
-    commonParams,
-    PingMetricStatsResponseSchema,
-    { signal },
-  )
-    .then((payload) => payload as z.output<typeof PingMetricStatsResponseSchema>)
-    .catch((error: unknown) => {
-      if (signal?.aborted || isAbortError(error)) throw error;
-      // 统计是曲线的可选增强：部署升级不完整或统计接口暂时失败时，仍展示 queryMetrics 曲线。
-      return null;
-    });
+  const statsRequest = includeStats
+    ? rpcCall(
+        "public:getPingMetricStats",
+        commonParams,
+        PingMetricStatsResponseSchema,
+        { signal },
+      )
+        .then((payload) => payload as z.output<typeof PingMetricStatsResponseSchema>)
+        .catch((error: unknown) => {
+          if (signal?.aborted) throw error;
+          return null;
+        })
+    : Promise.resolve(null);
   const [metricPayload, statsPayload, publicTasks] = await Promise.all([
     queryMetricPayload(
       {
@@ -491,21 +575,46 @@ async function getPingMetricData({
         metric_keys: [PING_LATENCY_METRIC, PING_LOSS_METRIC],
         ...(taskId != null ? { tags: { task_id: String(taskId) } } : {}),
         aggregation: "avg",
-        fill_empty: true,
+        fill_empty: false,
       },
       signal,
     ),
     statsRequest,
     loadPublicPingTasks().catch(() => null),
   ]);
-  const stats = statsPayload ? normalizePingMetricStats(statsPayload) : [];
-  const series: PingMetricSeries[] = metricPayload.series.map((item) => ({
+  let series: PingMetricSeries[] = metricPayload.series.map((item) => ({
     metricKey: item.metric_key,
     client: item.entity_id,
     tags: item.tags ?? item.tag ?? {},
+    intervalSeconds: item.interval_seconds,
     points: item.points,
   }));
+  if (repairBoundary && entityIds?.length) {
+    series = await repairMetricBoundary(
+      series,
+      metricPayload,
+      requestRange,
+      {
+        entity_ids: entityIds,
+        metric_keys: [PING_LATENCY_METRIC, PING_LOSS_METRIC],
+        ...(taskId != null ? { tags: { task_id: String(taskId) } } : {}),
+      },
+      (item, intervalSeconds) => ({
+        metricKey: item.metric_key,
+        client: item.entity_id,
+        tags: item.tags ?? item.tag ?? {},
+        intervalSeconds,
+        points: rawMetricPoints(item),
+      }),
+      {},
+      signal,
+    );
+  }
   const records = mergePingMetricSeries(series);
+  const stats = reconcilePingMetricStats(
+    statsPayload ? normalizePingMetricStats(statsPayload) : [],
+    records,
+  );
   const intervalSeconds = Math.max(
     0,
     ...metricPayload.series.map((item) => item.interval_seconds),
@@ -537,19 +646,19 @@ async function getPingMetricData({
   };
 }
 
-export async function getMe(): Promise<Me> {
+export async function getMe(options?: ApiCallOptions): Promise<Me> {
   // 必须 cast:zod `.passthrough()` schema 经 apiGet 推断出的是 input 类型(默认字段
   // 变可选),这里要重新收窄回来。
-  return (await apiGet("/api/me", MeSchema)) as Me;
+  return (await apiGet("/api/me", MeSchema, options)) as Me;
 }
 
-export async function getPublic(): Promise<PublicConfig> {
-  return (await apiGet("/api/public", PublicConfigSchema)) as PublicConfig;
+export async function getPublic(options?: ApiCallOptions): Promise<PublicConfig> {
+  return (await apiGet("/api/public", PublicConfigSchema, options)) as PublicConfig;
 }
 
 export async function getNodesLatestStatus(
   uuids?: string[],
-  options?: { timeout?: number },
+  options?: { timeout?: number; signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   const payload = await rpcCall(
     "common:getNodesLatestStatus",
@@ -560,7 +669,7 @@ export async function getNodesLatestStatus(
   return normalizeRpcLatestStatus(payload);
 }
 
-export async function getNodes(): Promise<NodeInfo[]> {
+export async function getNodes(options?: ApiCallOptions): Promise<NodeInfo[]> {
   // 走 common:getNodes（RPC2）：它按 SendIpAddrToGuest 设置下发 ipv4/ipv6（管理员全量 /
   // 访客打码），所以前端能显示 V4/V6；/api/nodes 则永远抹掉 IP，拿不到。
   try {
@@ -568,27 +677,33 @@ export async function getNodes(): Promise<NodeInfo[]> {
       "common:getNodes",
       {},
       z.record(z.string(), NodeInfoSchema),
+      options,
     );
     return Object.values(map) as NodeInfo[];
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) throw error;
     // RPC 不可用时兜底回旧的 HTTP 接口（拿不到 IP，但节点列表照常加载）。
-    return (await apiGet("/api/nodes", z.array(NodeInfoSchema))) as NodeInfo[];
+    return (await apiGet("/api/nodes", z.array(NodeInfoSchema), options)) as NodeInfo[];
   }
 }
 
-export async function getAdminClients(): Promise<AdminClient[]> {
-  return (await apiGet("/api/admin/client/list", z.array(AdminClientSchema))) as AdminClient[];
+export async function getAdminClients(options?: ApiCallOptions): Promise<AdminClient[]> {
+  return (await apiGet("/api/admin/client/list", z.array(AdminClientSchema), options)) as AdminClient[];
 }
 
 export async function getLoadRecords(
   uuid: string,
   hours = 6,
+  options?: ApiCallOptions,
 ): Promise<LoadRecordsResponse> {
   const requestRange = createRequestRange(hours);
-  try {
-    return await getLoadMetricData(uuid, hours);
-  } catch {
-    // 旧版后端没有 public metric API，或新接口暂时失败时回退兼容记录接口。
+  if (!options?.skipMetricQuery) {
+    try {
+      return await getLoadMetricData(uuid, hours, options?.signal);
+    } catch (error) {
+      if (options?.signal?.aborted) throw error;
+      // 旧版后端没有 public metric API，或新接口暂时失败时回退兼容记录接口。
+    }
   }
 
   try {
@@ -602,15 +717,18 @@ export async function getLoadRecords(
         maxCount,
       },
       RpcRecordsSchema,
+      { signal: options?.signal, timeout: options?.timeout },
     );
     return normalizeRpcLoadRecords(uuid, payload, requestRange);
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) throw error;
     const legacy = (await apiGet(
       `/api/records/load?${new URLSearchParams({ uuid, hours: String(hours) })}`,
       z.object({
         count: z.number().default(0),
         records: z.array(LoadRecordSchema).default([]),
       }),
+      { signal: options?.signal, timeout: options?.timeout },
     )) as LoadRecordsResponse;
     return {
       ...legacy,
@@ -620,9 +738,79 @@ export async function getLoadRecords(
   }
 }
 
+export interface TodayTrafficMetricResponse {
+  series: TrafficMetricSeries[];
+  rangeStartMs: number;
+  rangeEndMs: number;
+  intervalSeconds?: number;
+}
+
+/**
+ * 查询浏览器本地“今天”的流量增量与上下行采样峰值。服务端按 5 分钟左右聚合，
+ * 流量使用 sum、速率使用 max；前端随后再汇总到每台节点，避免拉取全天原始点。
+ */
+export async function getTodayTrafficMetrics(
+  entityIds: string[],
+  startMs: number,
+  endMs: number,
+  options?: ApiCallOptions,
+): Promise<TodayTrafficMetricResponse> {
+  if (entityIds.length === 0) {
+    return { series: [], rangeStartMs: startMs, rangeEndMs: endMs };
+  }
+
+  const fiveMinutesMs = 5 * 60 * 1000;
+  const maxPoints = Math.max(1, Math.ceil((endMs - startMs) / fiveMinutesMs));
+  const requestRange = { rangeStartMs: startMs, rangeEndMs: endMs };
+  const metricPayload = await queryMetricPayload(
+    {
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      entity_ids: entityIds,
+      metric_keys: TODAY_TRAFFIC_METRIC_KEYS,
+      max_points: maxPoints,
+      aggregation_by_metric: TODAY_TRAFFIC_AGGREGATION,
+      fill_empty: false,
+    },
+    options?.signal,
+    options?.timeout,
+  );
+  let series: TrafficMetricSeries[] = metricPayload.series.map((item) => ({
+    metricKey: item.metric_key,
+    client: item.entity_id,
+    intervalSeconds: item.interval_seconds,
+    points: item.points,
+  }));
+  series = await repairMetricBoundary(
+    series,
+    metricPayload,
+    requestRange,
+    {
+      entity_ids: entityIds,
+      metric_keys: TODAY_TRAFFIC_METRIC_KEYS,
+    },
+    (item, intervalSeconds) => ({
+      metricKey: item.metric_key,
+      client: item.entity_id,
+      intervalSeconds,
+      points: rawMetricPoints(item),
+    }),
+    TODAY_TRAFFIC_AGGREGATION,
+    options?.signal,
+    options?.timeout,
+  );
+  const intervalSeconds = Math.max(0, ...series.map((item) => item.intervalSeconds ?? 0));
+  return {
+    series,
+    ...getMetricPayloadRange(metricPayload, requestRange),
+    intervalSeconds: intervalSeconds > 0 ? intervalSeconds : undefined,
+  };
+}
+
 export async function getPingRecords(
   uuid: string,
   hours = 6,
+  options?: ApiCallOptions,
 ): Promise<PingRecordsResponse> {
   const requestRange = createRequestRange(hours);
   try {
@@ -630,8 +818,10 @@ export async function getPingRecords(
       hours,
       entityIds: [uuid],
       maxPoints: DETAIL_METRIC_MAX_POINTS,
+      signal: options?.signal,
     });
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) throw error;
     // 旧版后端没有 public metric API，或新版接口暂时失败时回退兼容记录接口。
   }
 
@@ -646,9 +836,11 @@ export async function getPingRecords(
         maxCount,
       },
       RpcRecordsSchema,
+      options,
     );
     return normalizeRpcPingRecords(uuid, payload, requestRange);
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) throw error;
     const legacy = (await apiGet(
       `/api/records/ping?${new URLSearchParams({ uuid, hours: String(hours) })}`,
       z.object({
@@ -656,6 +848,7 @@ export async function getPingRecords(
         records: z.array(PingRecordSchema).default([]),
         tasks: z.array(PingTaskSchema).default([]),
       }),
+      options,
     )) as PingRecordsResponse;
     return {
       ...legacy,
@@ -664,8 +857,31 @@ export async function getPingRecords(
   }
 }
 
-export async function getAdminPingTasks(): Promise<PingTask[]> {
-  return (await apiGet("/api/admin/ping", z.array(PingTaskSchema))) as PingTask[];
+export async function getPingMetricStats(
+  uuid: string,
+  hours = 6,
+  options?: ApiCallOptions,
+): Promise<PingTaskStats[]> {
+  if (metricQueryApiUnavailable) {
+    throw new Error("Metric query API is unavailable on this server");
+  }
+  const payload = await rpcCall(
+    "public:getPingMetricStats",
+    {
+      hours,
+      entity_ids: [uuid],
+      max_points: DETAIL_METRIC_MAX_POINTS,
+    },
+    PingMetricStatsResponseSchema,
+    options,
+  );
+  return normalizePingMetricStats(
+    payload as z.output<typeof PingMetricStatsResponseSchema>,
+  );
+}
+
+export async function getAdminPingTasks(options?: ApiCallOptions): Promise<PingTask[]> {
+  return (await apiGet("/api/admin/ping", z.array(PingTaskSchema), options)) as PingTask[];
 }
 
 export async function saveThemeSettings(
@@ -712,10 +928,12 @@ export async function getPingOverview(
       entityIds: options?.entityIds,
       taskId,
       maxPoints: OVERVIEW_METRIC_MAX_POINTS,
+      includeStats: true,
+      repairBoundary: true,
       signal: options?.signal,
     });
   } catch (error) {
-    if (options?.signal?.aborted || isAbortError(error)) throw error;
+    if (options?.signal?.aborted) throw error;
     // 旧版后端没有 public metric API 时继续走原有记录接口。
   }
 

@@ -1,6 +1,6 @@
 import type { LoadRecord } from "@/types/komari";
 
-export const LOAD_METRIC_FIELD = {
+const LOAD_METRIC_FIELD = {
   "cpu.usage": "cpu",
   "memory.used": "ram",
   "memory.total": "ram_total",
@@ -31,6 +31,7 @@ export const LOAD_LAST_AGGREGATION = {
 export interface LoadMetricSeries {
   metricKey: string;
   client: string;
+  intervalSeconds?: number;
   points: Array<{ time: string; value: number | null; count: number }>;
 }
 

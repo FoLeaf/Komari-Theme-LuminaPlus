@@ -1,9 +1,10 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { AppShell } from "@/components/shell/AppShell";
 import { RouteErrorFallback } from "@/components/shell/ErrorBoundary";
 import { Spinner } from "@/components/ui/Spinner";
 import { loadAssetsPage } from "@/services/assetsPageLoader";
+import { Traffic } from "@/pages/Traffic";
 
 const Home = lazy(() => import("@/pages/Home").then((m) => ({ default: m.Home })));
 const Instance = lazy(() =>
@@ -16,12 +17,16 @@ const NotFound = lazy(() =>
   import("@/pages/NotFound").then((m) => ({ default: m.NotFound })),
 );
 
-function Loading() {
+function LoadingFallback() {
   return (
     <div className="flex h-[60vh] items-center justify-center">
       <Spinner />
     </div>
   );
+}
+
+function suspended(page: ReactNode) {
+  return <Suspense fallback={<LoadingFallback />}>{page}</Suspense>;
 }
 
 export const router = createBrowserRouter([
@@ -32,35 +37,23 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: (
-          <Suspense fallback={<Loading />}>
-            <Home />
-          </Suspense>
-        ),
+        element: suspended(<Home />),
       },
       {
         path: "instance/:uuid",
-        element: (
-          <Suspense fallback={<Loading />}>
-            <Instance />
-          </Suspense>
-        ),
+        element: suspended(<Instance />),
       },
       {
         path: "assets",
-        element: (
-          <Suspense fallback={<Loading />}>
-            <Assets />
-          </Suspense>
-        ),
+        element: suspended(<Assets />),
+      },
+      {
+        path: "traffic",
+        element: <Traffic />,
       },
       {
         path: "404",
-        element: (
-          <Suspense fallback={<Loading />}>
-            <NotFound />
-          </Suspense>
-        ),
+        element: suspended(<NotFound />),
       },
       { path: "*", element: <Navigate to="/404" replace /> },
     ],

@@ -1,7 +1,6 @@
-/* 四档卡片共用的运维面板基底。层级依赖表面色与描边，不使用阴影、顶光或悬浮位移。 */
+/* 大卡与小卡共用的运维面板基底。层级依赖表面色与描边，不使用阴影、顶光或悬浮位移。 */
 .server-card,
-.compact-node-card,
-.mini-node-card {
+.compact-node-card {
   position: relative;
   background: var(--surface-a);
   border: 1px solid var(--border);
@@ -11,26 +10,23 @@
   overflow: hidden;
 }
 .server-card {
-  contain-intrinsic-size: 438px;
+  contain-intrinsic-size: auto 438px;
   transition:
     border-color 160ms ease,
     background 160ms ease;
 }
 .server-card::before,
-.compact-node-card::before,
-.mini-node-card::before {
+.compact-node-card::before {
   content: none;
 }
 .server-card:hover,
-.compact-node-card:hover,
-.mini-node-card:hover {
+.compact-node-card:hover {
   border-color: var(--border-strong);
   background: color-mix(in srgb, var(--hover-bg-a) 38%, var(--surface-a));
 }
 
 .server-card.is-offline,
-.compact-node-card.is-offline,
-.mini-node-card.is-offline {
+.compact-node-card.is-offline {
   background: color-mix(in srgb, var(--status-offline) 5%, var(--surface-a));
   border-color: color-mix(in srgb, var(--status-offline) 48%, var(--border));
   box-shadow: none;
@@ -40,7 +36,7 @@
   display: flex;
   flex-direction: column;
   padding: 18px 18px 15px;
-  gap: 16px;
+  gap: 14px;
 }
 
 .server-card-header {
@@ -56,7 +52,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .server-card-title-row {
@@ -168,13 +164,13 @@
 .server-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 20px;
+  gap: 14px 20px;
 }
 
 .metric-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -215,8 +211,8 @@
 
 /* 大卡分区使用一套连续节奏，避免每个数据块都变成小卡片。 */
 .server-card-stack > .card-metric-section + .card-metric-section {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--hairline);
 }
 
@@ -229,7 +225,7 @@
 .traffic-stat {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -350,7 +346,7 @@
 .traffic-quota {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   /* 在 stack gap 之外额外加点上间距,避免「剩余流量」挤到「出站/入站」那行。 */
   margin-top: 0;
@@ -428,7 +424,7 @@
 .server-health-block {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -468,11 +464,11 @@
 }
 
 .server-card-footer {
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .server-card-meta-grid {
@@ -559,6 +555,6 @@
   .server-health-grid,
   .server-card-meta-grid {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 12px;
   }
 }

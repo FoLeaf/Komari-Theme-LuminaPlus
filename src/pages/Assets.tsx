@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { CalendarClock, ChevronDown, ChevronLeft, ChevronUp, RefreshCw } from "lucide-react";
@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useHourlyClock } from "@/hooks/useClock";
 import {
   calculateCostSummary,
   formatCnyMoney,
@@ -57,7 +58,7 @@ const MOBILE_SORT_OPTIONS: Array<{ field: AssetsSortField; label: string }> = [
   { field: "expiry", label: "到期" },
 ];
 
-const ASSETS_MOBILE_QUERY = "(max-width: 860px)";
+const ASSETS_MOBILE_QUERY = "(max-width: 720px)";
 
 function sortValue(detail: AssetDetail, field: AssetsSortField): number {
   switch (field) {
@@ -120,9 +121,11 @@ export function Assets() {
   const [sortField, setSortField] = useState<AssetsSortField>("weight");
   const [sortDirection, setSortDirection] = useState<AssetsSortDirection>("asc");
   const isMobileLayout = useMediaQuery(ASSETS_MOBILE_QUERY);
+  const now = useHourlyClock();
   const allNodes = useAllNodeMeta();
   const { data: me } = useAuth();
   const themeSettings = useThemeSettings();
+  const forceRateRefresh = useRef(false);
   // 与首页同一可见性口径:后台 hidden 仅登录管理员可见,主题级隐藏对所有人剔除,
   // auth 未就绪按访客处理(fail-closed)。
   const hiddenUuids = useMemo(
@@ -137,14 +140,18 @@ export function Assets() {
     [allNodes, me?.logged_in, hiddenUuids],
   );
   // 资产详情页是风险核对入口：这里始终按真实到期数据展示，不读取首页的关闭/稍后偏好。
-  const renewalReminders = useMemo(() => getRenewalReminders(nodes), [nodes]);
+  const renewalReminders = useMemo(() => getRenewalReminders(nodes, now), [nodes, now]);
   const renewalByUuid = useMemo(
     () => new Map(renewalReminders.map((item) => [item.uuid, item])),
     [renewalReminders],
   );
   const rateQuery = useQuery({
     queryKey: ["cost-rates", themeSettings.costRateApiUrl],
-    queryFn: () => getExchangeRates(themeSettings.costRateApiUrl),
+    queryFn: ({ signal }) => {
+      const ignoreCache = forceRateRefresh.current;
+      forceRateRefresh.current = false;
+      return getExchangeRates(themeSettings.costRateApiUrl, { signal, ignoreCache });
+    },
     staleTime: 60 * 60 * 1000,
     enabled: themeSettings.isReady && nodes.length > 0,
     retry: 1,
@@ -157,9 +164,10 @@ export function Assets() {
             themeSettings.costIgnoredNodes,
             rateQuery.data.rates,
             themeSettings.costPremiums,
+            now,
           )
         : null,
-    [nodes, themeSettings.costIgnoredNodes, themeSettings.costPremiums, rateQuery.data],
+    [nodes, now, themeSettings.costIgnoredNodes, themeSettings.costPremiums, rateQuery.data],
   );
   const detailRows = useMemo(() => {
     const rows = summary?.details.slice() ?? [];
@@ -202,7 +210,7 @@ export function Assets() {
     return <Navigate to="/" replace />;
   }
 
-  const hasPremium = summary != null && summary.premiumTotalCny !== 0;
+  const hasPremium = summary?.details.some((detail) => detail.premiumCny !== 0) ?? false;
   const ledgerRows: Array<{
     label: string;
     value: string;
@@ -211,7 +219,7 @@ export function Assets() {
   }> = [
     { label: "年化总支出", value: summary ? formatCnyMoney(summary.totalCny) : "--" },
     { label: "月均支出", value: summary ? formatCnyMoney(summary.monthlyCny) : "--" },
-    ...(hasPremium
+    ...(summary != null && hasPremium
       ? [
           {
             label: "溢价盈亏",
@@ -232,7 +240,7 @@ export function Assets() {
           },
         ]
       : []),
-    ...(hasPremium
+    ...(summary != null && hasPremium
       ? [
           {
             label: "实际剩余价值",
@@ -257,8 +265,11 @@ export function Assets() {
           type="button"
           className={`cost-summary-action${rateQuery.isFetching ? " is-spinning" : ""}`}
           onClick={() => {
+            forceRateRefresh.current = true;
             void rateQuery.refetch();
           }}
+          disabled={rateQuery.isFetching}
+          aria-busy={rateQuery.isFetching}
           aria-label="刷新汇率与统计"
           title="刷新"
         >
@@ -337,18 +348,21 @@ export function Assets() {
                   <thead>
                     <tr>
                       {TABLE_COLUMNS.map((column) => (
-                        <th key={column.field} data-numeric={column.numeric || undefined}>
+                        <th
+                          key={column.field}
+                          data-numeric={column.numeric || undefined}
+                          aria-sort={
+                            sortField === column.field
+                              ? sortDirection === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
                           <button
                             type="button"
                             onClick={() => handleSort(column.field)}
                             data-active={sortField === column.field}
-                            aria-sort={
-                              sortField === column.field
-                                ? sortDirection === "asc"
-                                  ? "ascending"
-                                  : "descending"
-                                : undefined
-                            }
                           >
                             {column.label}
                             {sortField === column.field && directionIcon}
@@ -374,7 +388,7 @@ export function Assets() {
                         >
                         <td>
                           <Link
-                            to={`/instance/${detail.uuid}`}
+                            to={`/instance/${encodeURIComponent(detail.uuid)}`}
                             className="assets-node-link"
                             title={detail.name}
                           >
@@ -454,11 +468,16 @@ export function Assets() {
                       title={detail.name}
                     >
                       <div className="cost-summary-detail-head">
-                        <Link to={`/instance/${detail.uuid}`} className="cost-summary-detail-name">
+                        <Link
+                          to={`/instance/${encodeURIComponent(detail.uuid)}`}
+                          className="cost-summary-detail-name"
+                        >
                           <Flag region={detail.region} size={12} />
                           <span className="cost-summary-detail-title">{detail.name}</span>
                         </Link>
-                        <strong title="剩余价值">{formatCnyMoney(detail.remainingCny)}</strong>
+                        <strong title="剩余价值">
+                          {detail.counted ? formatCnyMoney(detail.remainingCny) : "—"}
+                        </strong>
                       </div>
                       <div className="cost-summary-detail-meta">
                         <span className="cost-summary-price-chip">{priceLabel}</span>

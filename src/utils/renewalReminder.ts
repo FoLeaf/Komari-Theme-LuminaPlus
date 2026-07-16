@@ -20,7 +20,7 @@ export type RenewalReminderSource = Pick<
   | "expired_at"
 >;
 
-export interface RenewalReminderItem {
+interface RenewalReminderItem {
   uuid: string;
   name: string;
   cycleKey: string;

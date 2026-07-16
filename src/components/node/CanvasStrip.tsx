@@ -9,10 +9,88 @@ interface CanvasStripProps {
   onHoverIndex?: (index: number | null) => void;
 }
 
-// 解析 CSS 自定义属性要走 getComputedStyle(documentElement),会强制一次同步样式
-// 重算。几十张卡片每个 realtime tick 各画好几张 canvas 时,这是渲染开销的大头,
-// 所以按主题缓存结果。缓存以 appearance dataset 为 key(读取廉价、不触发 reflow),
-// 主题切换时清空。
+type WidthListener = (width: number) => void;
+type VisibilityListener = (visible: boolean) => void;
+
+const observedWidths = new Map<Element, WidthListener>();
+const fallbackResizeListeners = new Set<() => void>();
+let sharedResizeObserver: ResizeObserver | null = null;
+let fallbackResizeListening = false;
+const observedVisibility = new Map<Element, VisibilityListener>();
+let sharedIntersectionObserver: IntersectionObserver | null = null;
+
+function normalizeWidth(width: number) {
+  return Number.isFinite(width) && width > 0 ? Math.round(width * 100) / 100 : 0;
+}
+
+function subscribeToWidth(element: HTMLElement, listener: WidthListener) {
+  if (typeof ResizeObserver !== "undefined") {
+    sharedResizeObserver ??= new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        observedWidths.get(entry.target)?.(normalizeWidth(entry.contentRect.width));
+      }
+    });
+    observedWidths.set(element, listener);
+    sharedResizeObserver.observe(element);
+
+    return () => {
+      observedWidths.delete(element);
+      sharedResizeObserver?.unobserve(element);
+      if (observedWidths.size === 0) {
+        sharedResizeObserver?.disconnect();
+        sharedResizeObserver = null;
+      }
+    };
+  }
+
+  const update = () => listener(normalizeWidth(element.getBoundingClientRect().width));
+  fallbackResizeListeners.add(update);
+  if (!fallbackResizeListening) {
+    fallbackResizeListening = true;
+    window.addEventListener("resize", notifyFallbackResizeListeners);
+  }
+
+  return () => {
+    fallbackResizeListeners.delete(update);
+    if (fallbackResizeListeners.size === 0 && fallbackResizeListening) {
+      fallbackResizeListening = false;
+      window.removeEventListener("resize", notifyFallbackResizeListeners);
+    }
+  };
+}
+
+function notifyFallbackResizeListeners() {
+  for (const listener of fallbackResizeListeners) listener();
+}
+
+function subscribeToVisibility(element: HTMLElement, listener: VisibilityListener) {
+  if (typeof IntersectionObserver === "undefined") {
+    listener(true);
+    return () => undefined;
+  }
+
+  sharedIntersectionObserver ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        observedVisibility.get(entry.target)?.(entry.isIntersecting);
+      }
+    },
+    { rootMargin: "160px 0px" },
+  );
+  observedVisibility.set(element, listener);
+  sharedIntersectionObserver.observe(element);
+
+  return () => {
+    observedVisibility.delete(element);
+    sharedIntersectionObserver?.unobserve(element);
+    if (observedVisibility.size === 0) {
+      sharedIntersectionObserver?.disconnect();
+      sharedIntersectionObserver = null;
+    }
+  };
+}
+
+// 缓存 CSS 变量，避免每张卡片每次重绘都触发样式计算。
 const cssColorCache = new Map<string, string>();
 let cssColorCacheKey: string | null = null;
 let colorValidationContext: CanvasRenderingContext2D | null | undefined;
@@ -25,6 +103,9 @@ const CANVAS_COLOR_FALLBACKS = {
     "--progress-disk": "#e97b35",
     "--progress-network": "#10b981",
     "--progress-load": "#ec4899",
+    "--progress-swap": "#6366f1",
+    "--traffic-up": "#3b82f6",
+    "--traffic-down": "#2f9e65",
     "--speed-idle": "#3aa76a",
     "--speed-low": "#d9992b",
     "--speed-high": "#e07a35",
@@ -44,6 +125,9 @@ const CANVAS_COLOR_FALLBACKS = {
     "--progress-disk": "#f1873d",
     "--progress-network": "#5bbb8a",
     "--progress-load": "#f472b6",
+    "--progress-swap": "#986ee2",
+    "--traffic-up": "#539bf5",
+    "--traffic-down": "#57ab5a",
     "--speed-idle": "#61c08f",
     "--speed-low": "#e0b34f",
     "--speed-high": "#ef8f55",
@@ -70,8 +154,7 @@ function fallbackCanvasColor(varName: string | null): string {
   ] ?? "#000000";
 }
 
-// 用户改了自定义指标配色时，颜色没换明暗模式，appearance-key 不会触发上面的失效逻辑，
-// canvas 会继续画缓存里的旧色。改色后由 useMetricColors 调这个手动清缓存，下次重绘读到新值。
+// 自定义配色不改变 appearance，需要显式失效。
 export function clearCssColorCache() {
   cssColorCache.clear();
   cssColorCacheKey = null;
@@ -91,9 +174,7 @@ function resolveCssColor(color: string): string {
   if (cached !== undefined) return cached || color;
 
   const resolved = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-  // 只缓存真正解析到的值。空串说明样式表还没生效(如首帧),缓存它会让 canvas 一直
-  // 画原始 `var(...)` 串(fillStyle 拒绝 → 不可见),直到主题切换。样式就绪后下一帧
-  // 重新解析很廉价。
+  // 首帧空值不缓存，样式就绪后可重新解析。
   if (resolved) cssColorCache.set(varName, resolved);
   return resolved || color;
 }
@@ -140,11 +221,7 @@ function parseHexColor(color: string): { r: number; g: number; b: number } | nul
   return null;
 }
 
-// 等价于 `color-mix(in srgb, baseColor <w*100>%, white <(1-w)*100>%)`,返回 rgb()
-// 串。之所以自己算而不直接把 `color-mix()` 串丢给 canvas:老 WebKit(Safari < 16.2)
-// 无法把 color-mix() 当 canvas 颜色解析,会抛 "The string did not match the expected
-// pattern."。sRGB 混合就是对 0–255 通道做逐通道 lerp,各浏览器结果都和 color-mix
-// 完全一致。解析不出 hex 时原样返回 baseColor(仍是合法 canvas 颜色)。
+// Canvas 兼容旧 WebKit：用通道插值代替 color-mix()。
 export function mixSrgbTowardWhite(baseColor: string, baseWeight: number): string {
   const rgb = parseHexColor(baseColor);
   if (!rgb) return baseColor;
@@ -176,11 +253,7 @@ function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: n
   };
 }
 
-// 所有交给 canvas 的颜色都过这一个收口。老 WebKit(Safari < 16)无法把现代颜色语法
-// 当 canvas 颜色解析,会抛 "The string did not match the expected pattern."——所以这里
-// 解析 `var(...)`,并把 `hsl()`(toHsl 输出的现代空格分隔形式)改写成 `rgb()`。再统一
-// 拿当前 canvas 实现校验;不支持或仍未解析的颜色回退到已知的主题 hex 值,而不是带着它
-// 走到 addColorStop/fillStyle 把老 WebKit 搞崩。
+// 统一解析并校验 Canvas 颜色，不支持时回退到主题色。
 export function safeCanvasColor(color: string): string {
   const varName = extractCssVarName(color);
   const value = (varName ? resolveCssColor(color) : color).trim();
@@ -238,43 +311,49 @@ export function CanvasStrip({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastHoverIndexRef = useRef<number | null>(null);
   const [width, setWidth] = useState(0);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const updateWidth = () => {
-      setWidth(canvas.clientWidth);
+    const updateWidth = (nextWidth: number) => {
+      setWidth((current) => (current === nextWidth ? current : nextWidth));
     };
 
-    updateWidth();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateWidth);
-      return () => window.removeEventListener("resize", updateWidth);
-    }
-
-    const observer = new ResizeObserver(() => {
-      updateWidth();
-    });
-    observer.observe(canvas);
-    return () => observer.disconnect();
+    updateWidth(normalizeWidth(canvas.getBoundingClientRect().width));
+    return subscribeToWidth(canvas, updateWidth);
   }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || width <= 0) return;
+    if (!canvas) return;
+    return subscribeToVisibility(canvas, setVisible);
+  }, []);
 
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(width * dpr));
-    canvas.height = Math.max(1, Math.round(height * dpr));
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !visible || width <= 0) return;
+
+    const devicePixelRatio = window.devicePixelRatio;
+    const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0
+      ? devicePixelRatio
+      : 1;
+    const pixelWidth = Math.max(1, Math.round(width * dpr));
+    const pixelHeight = Math.max(1, Math.round(height * dpr));
+
+    // 重设 canvas 尺寸会清空状态并重新分配位图；数据重绘时尺寸通常没有变化。
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, width, height);
     draw(ctx, width, height);
-  }, [draw, height, redrawKey, width]);
+  }, [draw, height, redrawKey, visible, width]);
 
   const handlePointerMove = (event: PointerEvent<HTMLCanvasElement>) => {
     if (!getHoverIndex || !onHoverIndex || width <= 0) return;

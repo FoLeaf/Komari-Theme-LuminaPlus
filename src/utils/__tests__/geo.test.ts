@@ -16,6 +16,7 @@ describe("getCountryCodeFromRegion", () => {
 
   it("accepts a whole-string ISO code", () => {
     expect(getCountryCodeFromRegion("JP")).toBe("JP");
+    expect(getCountryCodeFromRegion("jp")).toBe("JP");
     expect(getCountryCodeFromRegion("UK")).toBe("GB");
   });
 
@@ -35,14 +36,15 @@ describe("getCountryCodeFromRegion", () => {
   });
 
   it("rejects stray 2-letter words that are not real ISO codes (regression)", () => {
-    // "GO" 是个单词不是国家代码 → 不能解析出一个假国旗
     expect(getCountryCodeFromRegion("GO Cloud")).toBeNull();
     expect(getDisplayRegionCode("GO Cloud")).toBe("UN");
+    expect(getCountryCodeFromRegion("My Server")).toBeNull();
+    expect(getCountryCodeFromRegion("server in Frankfurt")).toBeNull();
+    expect(getCountryCodeFromRegion("No region selected")).toBeNull();
   });
 
   it("still resolves a valid embedded code, even after a stray token", () => {
     expect(getCountryCodeFromRegion("SE Stockholm")).toBe("SE");
-    // 第一个 token 无效(GO),第二个有效(HK) → HK 胜出
     expect(getCountryCodeFromRegion("GO HK")).toBe("HK");
   });
 });

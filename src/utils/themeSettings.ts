@@ -25,7 +25,7 @@ import {
 import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
 
 export type Appearance = "system" | "light" | "dark";
-export type NodeViewMode = "large" | "compact" | "mini" | "list";
+export type NodeViewMode = "large" | "compact" | "list";
 
 export interface ResolvedThemeSettings {
   defaultAppearance: Appearance;
@@ -119,14 +119,16 @@ function normalizeAppearance(
 }
 
 export function isNodeViewMode(value: unknown): value is NodeViewMode {
-  return value === "large" || value === "compact" || value === "mini" || value === "list";
+  return value === "large" || value === "compact" || value === "list";
 }
 
 function normalizeNodeViewMode(
   value: unknown,
   fallback: NodeViewMode,
 ): NodeViewMode {
-  return isNodeViewMode(value) ? value : fallback;
+  if (isNodeViewMode(value)) return value;
+  // 已删除档位或其他旧字符串统一落到小卡，避免升级后出现无选中项。
+  return typeof value === "string" && value.length > 0 ? "compact" : fallback;
 }
 
 // 列表档仅桌面可用(见 useViewMode 的 MOBILE_VIEW_MODES)。移动端即便配置里存了 "list"

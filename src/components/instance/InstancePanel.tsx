@@ -12,9 +12,7 @@ export function InstancePanel({
   className,
 }: {
   title: string;
-  /** 标题上方的编号/分区小标（如主题管理的 01·外观）。仅在传入时渲染。 */
   kicker?: ReactNode;
-  /** 紧贴标题文字之后的内联控件（如详情页的服务器切换器）。 */
   titleAction?: ReactNode;
   description?: ReactNode;
   aside?: ReactNode;
@@ -30,21 +28,20 @@ export function InstancePanel({
             <h2 className="instance-panel-title">{title}</h2>
             {titleAction}
           </div>
-          {description && <p className="instance-panel-description">{description}</p>}
+          {description != null && <p className="instance-panel-description">{description}</p>}
         </div>
-        {aside && <div className="instance-panel-aside">{aside}</div>}
+        {aside != null && <div className="instance-panel-aside">{aside}</div>}
       </header>
       {children}
     </section>
   );
 }
 
-// 图表加载态:带标题面板 + 居中 Spinner + 文案。LoadChart/PingChart 共用,避免各写一份漂移。
 export function InstanceChartLoading({ title }: { title: string }) {
   return (
     <InstancePanel title={title}>
       <div className="instance-chart-loading" aria-busy>
-        <Spinner size={26} />
+        <Spinner size={26} label="" />
         <span>加载中…</span>
       </div>
     </InstancePanel>

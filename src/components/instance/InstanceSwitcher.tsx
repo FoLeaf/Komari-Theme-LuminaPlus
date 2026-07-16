@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -6,9 +13,6 @@ import { useAllNodeMeta, useHomeNodeSummaries } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
 
-// 详情页标题旁的“快速切换服务器”下拉。数据全部来自已建立的 wsStore（详情页本就在跑实时
-// 轮询），不发新请求；列表顺序沿用 state.order —— 即后台权重(weight)顺序，与首页/后台一致，
-// 不在这里二次排序。
 export function InstanceSwitcher({ currentUuid }: { currentUuid: string }) {
   const allMeta = useAllNodeMeta();
   const summaries = useHomeNodeSummaries();
@@ -16,27 +20,21 @@ export function InstanceSwitcher({ currentUuid }: { currentUuid: string }) {
   const { data: me } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const listId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
-  // online 状态在 summaries（含 metrics）里，name 在 allMeta 里，两者都按相同的 state.order
-  // 排列；用 uuid 关联，取 online 给小圆点用。
   const onlineByUuid = useMemo(
     () => new Map(summaries.map((node) => [node.uuid, node.online] as const)),
     [summaries],
   );
 
-  // 主题级「隐藏节点」(按名称/UUID 命中)在快速切换里也不展示。
   const hiddenUuids = useMemo(
     () => collectMatchingNodeUuids(allMeta, hiddenNodes),
     [allMeta, hiddenNodes],
   );
 
-  // 与首页完全一致的可见性口径:
-  // - 主题级隐藏:对所有人隐藏;
-  // - 后台 hidden 标记:仅登录管理员可见,访客一律不显示(即便正停在某个隐藏节点的详情页,
-  //   访客也不该在切换列表里看到它)。
-  // auth 未就绪时按「访客」处理(fail-closed),不会先冒出隐藏节点再消失。
   const nodes = useMemo(
     () =>
       allMeta
@@ -51,14 +49,16 @@ export function InstanceSwitcher({ currentUuid }: { currentUuid: string }) {
     [allMeta, hiddenUuids, me?.logged_in, onlineByUuid],
   );
 
-  // 点击外部 / 按 Esc 关闭。
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -68,54 +68,99 @@ export function InstanceSwitcher({ currentUuid }: { currentUuid: string }) {
     };
   }, [open]);
 
-  // 打开时把当前项滚入可视区（节点多时友好）。
   useEffect(() => {
     if (!open) return;
-    listRef.current
-      ?.querySelector<HTMLElement>("[data-active='true']")
-      ?.scrollIntoView({ block: "nearest" });
+    const target =
+      listRef.current?.querySelector<HTMLButtonElement>("[data-active='true']") ??
+      listRef.current?.querySelector<HTMLButtonElement>("[role='option']");
+    target?.scrollIntoView({ block: "nearest" });
+    target?.focus();
   }, [open]);
 
   // 只有一个（或没有）节点时没必要显示切换器。
   if (nodes.length <= 1) return null;
 
   const select = (uuid: string) => {
+    triggerRef.current?.focus();
     setOpen(false);
-    if (uuid !== currentUuid) navigate(`/instance/${uuid}`);
+    if (uuid !== currentUuid) navigate(`/instance/${encodeURIComponent(uuid)}`);
   };
+
+  const handleListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const options = Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>("[role='option']") ?? [],
+    );
+    if (options.length === 0) return;
+    event.preventDefault();
+    const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement);
+    const nextIndex =
+      event.key === "Home"
+          ? 0
+        : event.key === "End"
+          ? options.length - 1
+          : currentIndex < 0
+            ? event.key === "ArrowUp"
+              ? options.length - 1
+              : 0
+          : event.key === "ArrowUp"
+            ? (currentIndex - 1 + options.length) % options.length
+            : (currentIndex + 1) % options.length;
+    options[nextIndex]?.focus();
+  };
+
+  const hasActiveNode = nodes.some((node) => node.uuid === currentUuid);
 
   return (
     <div className="instance-switcher" ref={rootRef}>
       <button
         type="button"
+        ref={triggerRef}
         className="instance-switcher-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listId}
         aria-label="切换服务器"
         title="切换服务器"
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
-        {/* 收起朝下、展开朝上（单箭头，符合常规习惯） */}
-        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        {open ? <ChevronUp size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
       </button>
       {open && (
-        <div className="instance-switcher-panel" role="listbox" ref={listRef}>
-          {nodes.map((node) => {
+        <div
+          id={listId}
+          className="instance-switcher-panel"
+          role="listbox"
+          aria-label="服务器"
+          ref={listRef}
+          onKeyDown={handleListKeyDown}
+        >
+          {nodes.map((node, index) => {
             const isActive = node.uuid === currentUuid;
             const status =
               node.online === true ? "online" : node.online === false ? "offline" : "unknown";
+            const statusLabel =
+              node.online === true ? "在线" : node.online === false ? "离线" : "状态未知";
             return (
               <button
                 key={node.uuid}
                 type="button"
                 role="option"
                 aria-selected={isActive}
+                tabIndex={isActive || (!hasActiveNode && index === 0) ? 0 : -1}
                 data-active={isActive ? "true" : "false"}
                 className="instance-switcher-item"
                 onClick={() => select(node.uuid)}
               >
                 <span className="instance-switcher-dot" data-status={status} aria-hidden />
                 <span className="instance-switcher-name">{node.name}</span>
+                <span className="sr-only">，{statusLabel}</span>
                 {isActive && <Check size={14} className="instance-switcher-check" aria-hidden />}
               </button>
             );

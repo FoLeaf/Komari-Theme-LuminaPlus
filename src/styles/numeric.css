@@ -1,10 +1,4 @@
-/* 仪表字:把全站「读数」统一交给内置的 Inter,并开启 slashed-zero + tabular 数字特性。
-   正文仍走 --font-sans(Apple 上 SF、其余平台 Inter)保持系统原生观感;但数字是这套
-   监控主题的主角,过去它们随平台字体漂移(Apple=SF、Windows=Inter),斜杠零也时有时无。
-   这里只对数值元素强制 --font-numeric,得到四端一致、带仪表盘性格的读数——斜杠零一眼把
-   0 和 O 分开,tabular 让逐秒跳动的数字不横向抖动。
-   不含 CJK 的元素才列进来:纯数字容器里偶发的中文兜底文案(如「计算中」)会顺着
-   --font-numeric 的 fallback 落到系统中文字体,不会出现豆腐块。 */
+/* 统一监控读数的字形和等宽数字特性。 */
 .tabular,
 .overview-card-value,
 .overview-card-unit,
@@ -21,10 +15,13 @@
 .compact-node-info-row-value,
 .compact-node-traffic-value,
 .compact-node-traffic-uptime,
-.mini-node-flow-row strong,
-.mini-node-health-value,
 .assets-hero-value,
 .assets-hero-currency,
+.traffic-summary-total,
+.traffic-summary-peak-main strong,
+.traffic-volume-value strong,
+.traffic-peak-value strong,
+.traffic-node-card-head > strong,
 .instance-series-stats,
 .instance-chart-meta strong,
 .instance-chart-range-chip,

@@ -5,19 +5,50 @@ import "uplot/dist/uPlot.min.css";
 import { InstanceDetails } from "@/components/instance/InstanceDetails";
 import { PingChart } from "@/components/instance/PingChart";
 import { LoadChart } from "@/components/instance/LoadChart";
+import { Spinner } from "@/components/ui/Spinner";
 import {
   buildLoadTimeRangeOptions,
   buildPingTimeRangeOptions,
 } from "@/components/instance/chartShared";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
+import { useNodeMeta, useNodeStoreStatus } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 
 const DEFAULT_PING_HOURS = 4;
+type TimeRangeOption = ReturnType<typeof buildLoadTimeRangeOptions>[number];
+
+function RangeSelector({
+  ranges,
+  value,
+  onChange,
+}: {
+  ranges: TimeRangeOption[];
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="instance-segmented is-scrollable">
+      {ranges.map((range) => (
+        <button
+          key={range.value}
+          type="button"
+          data-active={value === range.value ? "true" : "false"}
+          aria-pressed={value === range.value}
+          onClick={() => onChange(range.value)}
+        >
+          {range.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function Instance() {
   const { uuid } = useParams<{ uuid: string }>();
   const { data: config } = usePublicConfig();
   const themeSettings = useThemeSettings();
+  const meta = useNodeMeta(uuid ?? "");
+  const storeStatus = useNodeStoreStatus(Boolean(uuid));
   const [chartType, setChartType] = useState<"load" | "ping">("load");
   const [loadHours, setLoadHours] = useState(0);
   const [pingHours, setPingHours] = useState(DEFAULT_PING_HOURS);
@@ -38,25 +69,16 @@ export function Instance() {
   );
   const showPingChart = themeSettings.isReady && themeSettings.showPingChart;
 
-  // 身份稳定:只读 ref,所以空依赖是安全的。它作为 onNodeReady 传给
-  // InstanceDetails 的 effect;若身份不稳定,父组件每次重渲染都会取消挂起的 rAF
-  // 又不重新调度,导致这次性的 scroll-into-view 丢失。
   const alignCharts = useCallback(() => {
     const frame = window.requestAnimationFrame(() => {
       const element = chartControlsRef.current;
       if (!element) return;
-      // 只在图表控件不在视口内时才滚动过去,避免用户已经看着这块区域时,
-      // 每次 mount/onNodeReady 都把视口猛地拽走。
       const rect = element.getBoundingClientRect();
       if (rect.top >= 0 && rect.top < window.innerHeight) return;
       element.scrollIntoView({ behavior: "auto", block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
-
-  useEffect(() => {
-    return alignCharts();
-  }, [alignCharts, uuid]);
 
   useEffect(() => {
     if (!loadRanges.some((range) => range.value === loadHours)) {
@@ -81,6 +103,34 @@ export function Instance() {
   }, [chartType, showPingChart]);
 
   if (!uuid) return null;
+
+  if (!meta) {
+    const message = storeStatus.hydrated
+      ? "找不到这个实例，它可能已被删除或链接无效。"
+      : storeStatus.nodeInfoError
+        ? "节点列表加载失败，系统正在自动重试。"
+        : null;
+    return (
+      <div className="flex flex-col gap-5 py-2">
+        <Link to="/" className="instance-page-back">
+          <ChevronLeft size={14} />
+          返回
+        </Link>
+        <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+          {message ? (
+            <>
+              <div className="text-[15px] font-semibold text-[var(--text-primary)]">
+                {storeStatus.hydrated ? "实例不存在" : "暂时无法加载实例"}
+              </div>
+              <p className="text-[13px] text-[var(--text-secondary)]">{message}</p>
+            </>
+          ) : (
+            <Spinner size={24} label="正在加载实例" />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5 py-2">
@@ -118,48 +168,20 @@ export function Instance() {
           )}
         </div>
         {chartType === "load" && (
-          <div
+          <RangeSelector
             key={`${chartType}-ranges`}
-            className="instance-segmented is-scrollable"
-          >
-            {loadRanges.map((range) => (
-              <button
-                key={range.value}
-                type="button"
-                data-active={loadHours === range.value ? "true" : "false"}
-                aria-pressed={loadHours === range.value}
-                onClick={() => {
-                  startTransition(() => {
-                    setLoadHours(range.value);
-                  });
-                }}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
+            ranges={loadRanges}
+            value={loadHours}
+            onChange={(value) => startTransition(() => setLoadHours(value))}
+          />
         )}
         {chartType === "ping" && showPingChart && (
-          <div
+          <RangeSelector
             key={`${chartType}-ranges`}
-            className="instance-segmented is-scrollable"
-          >
-            {pingRanges.map((range) => (
-              <button
-                key={range.value}
-                type="button"
-                data-active={pingHours === range.value ? "true" : "false"}
-                aria-pressed={pingHours === range.value}
-                onClick={() => {
-                  startTransition(() => {
-                    setPingHours(range.value);
-                  });
-                }}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
+            ranges={pingRanges}
+            value={pingHours}
+            onChange={(value) => startTransition(() => setPingHours(value))}
+          />
         )}
       </div>
       <div className="instance-chart-stage">

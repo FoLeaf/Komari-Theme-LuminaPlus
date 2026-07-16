@@ -1,4 +1,13 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import UplotReact from "uplot-react";
 import type uPlot from "uplot";
 import { ArrowDown, ArrowUp, Cpu, Gauge, HardDrive, MemoryStick, Network, RefreshCw, Workflow } from "lucide-react";
@@ -23,7 +32,7 @@ import {
 import { formatBytes, formatTrafficRateLabel } from "@/utils/format";
 import { historyChartRangeSeconds, historyCoverageLabel } from "@/utils/historyRange";
 import { usePreferences } from "@/hooks/usePreferences";
-import type { NodeMetrics } from "@/types/komari";
+import type { LoadRecord, NodeMetrics } from "@/types/komari";
 
 const LOAD_HISTORY_SAMPLE_LIMIT = 360;
 const LOAD_HISTORY_RENDER_LIMIT = 720;
@@ -70,7 +79,6 @@ interface ChartPoint {
   [key: string]: number | null;
 }
 
-
 function metricData(points: ChartPoint[], keys: string[]): uPlot.AlignedData {
   const times = points.map((point) => point.time);
   return [times, ...keys.map((key) => points.map((point) => point[key] ?? null))] as uPlot.AlignedData;
@@ -111,7 +119,7 @@ function getSeriesLabel(key: string) {
 
 function pointFromNode(node: NodeMetrics): ChartPoint {
   return {
-    time: Date.now() / 1000,
+    time: node.updatedAt > 0 ? node.updatedAt / 1000 : Date.now() / 1000,
     cpu: node.cpuPct,
     ram: node.ramTotal > 0 ? (node.ramUsed / node.ramTotal) * 100 : 0,
     swap: node.swapTotal > 0 ? (node.swapUsed / node.swapTotal) * 100 : 0,
@@ -227,6 +235,7 @@ function buildBaseOptions({
     hooks: {
       init: [
         (u) => {
+          u.root.setAttribute("role", "img");
           u.root.setAttribute("aria-label", title);
         },
       ],
@@ -243,8 +252,6 @@ const ChartCard = memo(function ChartCard({
   points,
   keys,
   colors,
-  width,
-  height,
   resolvedAppearance,
   rangeHours,
   unit = "",
@@ -261,8 +268,6 @@ const ChartCard = memo(function ChartCard({
   points: ChartPoint[];
   keys: string[];
   colors: string[];
-  width: number;
-  height: number;
   resolvedAppearance: "light" | "dark";
   rangeHours: number;
   unit?: string;
@@ -271,6 +276,7 @@ const ChartCard = memo(function ChartCard({
   axisSize?: number;
   xRange?: [number, number] | null;
 }) {
+  const { w, h, ref: chartSizeRef } = useResponsiveChartSize("grid");
   const dataRef = useRef<uPlot.AlignedData>([[]]);
   const [tooltip, setTooltip] = useState<ChartTooltipState>({
     show: false,
@@ -280,7 +286,7 @@ const ChartCard = memo(function ChartCard({
     time: "",
   });
   const data = useMemo(() => metricData(points, keys), [points, keys]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     dataRef.current = data;
   }, [data]);
   const baseOptions = useMemo(
@@ -300,7 +306,6 @@ const ChartCard = memo(function ChartCard({
     [axisKind, axisSize, colors, keys, rangeHours, resolvedAppearance, spanGaps, title, unit, xRange],
   );
 
-  // 不含尺寸的增强配置 (base + 交互 hook)。resize 时保持稳定，最终对象上只有 width/height 变。
   const enhancedOptions = useMemo<Omit<uPlot.Options, "width" | "height">>(() => {
     const tooltip = buildChartTooltipHooks({
       dataRef,
@@ -323,15 +328,15 @@ const ChartCard = memo(function ChartCard({
       hooks: {
         ...baseOptions.hooks,
         init: [...(baseOptions.hooks?.init ?? []), tooltip.onInit],
+        destroy: [...(baseOptions.hooks?.destroy ?? []), tooltip.onDestroy],
         setCursor: [tooltip.onSetCursor],
       },
     };
   }, [colors, keys, baseOptions, rangeHours, unit]);
 
-  // resize 时只有这个 memo 变，uplot-react 走 setSize() 而非整个 chart 的拆建重建。
   const chartOptions = useMemo<uPlot.Options>(
-    () => ({ ...enhancedOptions, width, height }) as uPlot.Options,
-    [enhancedOptions, width, height],
+    () => ({ ...enhancedOptions, width: w, height: h }) as uPlot.Options,
+    [enhancedOptions, w, h],
   );
 
   return (
@@ -346,15 +351,15 @@ const ChartCard = memo(function ChartCard({
         </div>
         <div className="instance-series-stats">
           <span className="tabular">{value}</span>
-          {note && <span className="tabular text-[var(--text-tertiary)]">{note}</span>}
+          {note != null && <span className="tabular text-[var(--text-tertiary)]">{note}</span>}
         </div>
       </header>
-      <div className="instance-uplot-wrap">
+      <div ref={chartSizeRef} className="instance-uplot-wrap">
         <UplotReact
           key={`${uuid}-${rangeHours}`}
           options={chartOptions}
           data={data}
-          resetScales={false}
+          resetScales={rangeHours === 0}
         />
         <ChartTooltip tooltip={tooltip} />
       </div>
@@ -372,11 +377,14 @@ export function LoadChart({
   active?: boolean;
 }) {
   const queryHours = hours === 0 ? 1 : hours;
-  const { data, isLoading, refetch } = useLoadRecords(uuid, queryHours, active);
+  const { data, isError, isFetching, isLoading, refetch } = useLoadRecords(
+    uuid,
+    queryHours,
+    active,
+  );
   const isRealtime = hours === 0;
   const node = useNodeMetrics(uuid, isRealtime && active);
   const { resolvedAppearance } = usePreferences();
-  const { w, h } = useResponsiveChartSize("grid");
   const [realtimePoints, setRealtimePoints] = useState<ChartPoint[]>([]);
   const [connectNulls, setConnectNulls] = useState(false);
 
@@ -394,29 +402,32 @@ export function LoadChart({
     setRealtimePoints([]);
   }, [hours, uuid]);
 
+  const historyRecords = useMemo<Array<{ record: LoadRecord; time: number }>>(
+    () =>
+      (data?.records ?? [])
+        .map((record) => ({ record, time: toChartSeconds(record.time) }))
+        .filter(({ time }) => time > 0)
+        .sort((left, right) => left.time - right.time),
+    [data],
+  );
+
   const historyPoints = useMemo<ChartPoint[]>(() => {
-    const records = [...(data?.records ?? [])];
-    const rawPoints = records
-      .map((record) => ({
-        time: toChartSeconds(record.time),
-        cpu: record.cpu,
-        ram: record.ram_total > 0 ? (record.ram / record.ram_total) * 100 : 0,
-        swap: record.swap_total > 0 ? (record.swap / record.swap_total) * 100 : 0,
-        disk: record.disk_total > 0 ? (record.disk / record.disk_total) * 100 : 0,
-        netIn: record.net_in,
-        netOut: record.net_out,
-        connections: record.connections,
-        udp: record.connections_udp,
-        process: record.process,
-      }))
-      .filter((point) => point.time > 0)
-      .sort((a, b) => a.time - b.time);
+    const rawPoints = historyRecords.map(({ record, time }) => ({
+      time,
+      cpu: record.cpu,
+      ram: record.ram_total > 0 ? (record.ram / record.ram_total) * 100 : 0,
+      swap: record.swap_total > 0 ? (record.swap / record.swap_total) * 100 : 0,
+      disk: record.disk_total > 0 ? (record.disk / record.disk_total) * 100 : 0,
+      netIn: record.net_in,
+      netOut: record.net_out,
+      connections: record.connections,
+      udp: record.connections_udp,
+      process: record.process,
+    }));
     const sampled = downsamplePoints(rawPoints, getHistoryRenderLimit(hours));
     const filled = fillMissingMetricPoints(sampled);
-    // 共享 helper 现在把缺失格子标成 `number | null | undefined` (ping 路径需要 undefined
-    // 标记 off-phase 列)。LoadChart 只用 null 填充，运行时不会出现 undefined——这里收窄回来。
     return interpolateMetricGaps(filled, LOAD_INTERPOLATE_KEYS) as ChartPoint[];
-  }, [data, hours]);
+  }, [historyRecords, hours]);
 
   const points = useMemo<ChartPoint[]>(() => {
     if (isRealtime) {
@@ -432,7 +443,7 @@ export function LoadChart({
   }, [historyPoints, isRealtime, realtimePoints]);
 
   const rangeSummary = formatRangeSummary(hours);
-  const sourceRecordCount = data?.records.length ?? 0;
+  const sourceRecordCount = historyRecords.length;
   const wasDownsampled = !isRealtime && sourceRecordCount > getHistoryRenderLimit(hours);
   const sampleSummary = isRealtime
     ? `${points.length} 个点`
@@ -456,6 +467,25 @@ export function LoadChart({
 
   if (isLoading) {
     return <InstanceChartLoading title="负载图表" />;
+  }
+
+  if (isError && !points.length) {
+    return (
+      <InstancePanel title="负载图表">
+        <div className="instance-empty">
+          <span>负载历史加载失败</span>
+          <button
+            type="button"
+            className="instance-toggle-button"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            aria-busy={isFetching}
+          >
+            {isFetching ? "重试中" : "重试"}
+          </button>
+        </div>
+      </InstancePanel>
+    );
   }
 
   if (!points.length) {
@@ -484,9 +514,15 @@ export function LoadChart({
             active={connectNulls}
             onToggle={() => setConnectNulls((value) => !value)}
           />
-          <button type="button" className="instance-toggle-button" onClick={() => void refetch()}>
-            <RefreshCw size={14} />
-            刷新
+          <button
+            type="button"
+            className="instance-toggle-button"
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            aria-busy={isFetching}
+          >
+            <RefreshCw size={14} aria-hidden />
+            {isFetching ? "刷新中" : "刷新"}
           </button>
           <span className="instance-chart-range-chip">{rangeSummary}</span>
         </div>
@@ -507,8 +543,6 @@ export function LoadChart({
           points={points}
           keys={CPU_KEYS}
           colors={CPU_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           unit="%"
@@ -539,8 +573,6 @@ export function LoadChart({
           points={points}
           keys={MEMORY_KEYS}
           colors={MEMORY_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           unit="%"
@@ -563,8 +595,6 @@ export function LoadChart({
           points={points}
           keys={DISK_KEYS}
           colors={DISK_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           unit="%"
@@ -592,8 +622,6 @@ export function LoadChart({
           points={points}
           keys={NETWORK_KEYS}
           colors={NETWORK_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           spanGaps={connectNulls}
@@ -616,8 +644,6 @@ export function LoadChart({
           points={points}
           keys={CONNECTION_KEYS}
           colors={CONNECTION_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           spanGaps={connectNulls}
@@ -645,8 +671,6 @@ export function LoadChart({
           points={points}
           keys={PROCESS_KEYS}
           colors={PROCESS_COLORS}
-          width={w}
-          height={h}
           resolvedAppearance={resolvedAppearance}
           rangeHours={hours}
           spanGaps={connectNulls}

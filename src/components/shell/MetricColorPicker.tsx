@@ -12,12 +12,19 @@ import {
 } from "lucide-react";
 import { usePreferences } from "@/hooks/usePreferences";
 import {
+  DEFAULT_DARK_DEPTH,
   METRIC_COLOR_GROUPS,
   METRIC_COLOR_META,
   readEffectiveColors,
   useMetricColorsEditor,
   type MetricColorKey,
 } from "@/hooks/useMetricColors";
+
+const DARK_DEPTH_PRESETS = [
+  { value: 0, label: "灰黑", title: "当前默认色" },
+  { value: 60, label: "深黑", title: "保留少量蓝灰层次" },
+  { value: 100, label: "纯黑", title: "纯黑画布，卡片保留层级" },
+] as const;
 
 const ICONS: Record<MetricColorKey, typeof Cpu> = {
   cpu: Cpu,
@@ -33,8 +40,16 @@ const ICONS: Record<MetricColorKey, typeof Cpu> = {
   trafficDown: ArrowDown,
 };
 
-export function MetricColorPicker() {
-  const { colors, setColor, resetColor, resetAll, saveError } = useMetricColorsEditor();
+export function MetricColorPicker({ hidden = false }: { hidden?: boolean }) {
+  const {
+    colors,
+    darkDepth,
+    setColor,
+    resetColor,
+    setDarkDepth,
+    resetAll,
+    saveError,
+  } = useMetricColorsEditor();
   const { resolvedAppearance } = usePreferences();
 
   // 默认色（无覆盖时生效的 token）。只在明暗模式切换/重置时重读 ——
@@ -48,10 +63,15 @@ export function MetricColorPicker() {
     (key: MetricColorKey) => colors[key] ?? base[key],
     [colors, base],
   );
-  const hasAny = Object.keys(colors).length > 0;
+  const hasAny = Object.keys(colors).length > 0 || darkDepth !== DEFAULT_DARK_DEPTH;
 
   return (
-    <div className="metric-color-picker" role="group" aria-label="卡片配色">
+    <div
+      className="metric-color-picker"
+      role="group"
+      aria-label="卡片配色"
+      hidden={hidden}
+    >
       <div className="metric-color-picker-head">
         <span>配色自定义</span>
         <button
@@ -67,6 +87,46 @@ export function MetricColorPicker() {
         </button>
       </div>
       {saveError && <div className="metric-color-error">保存失败（请确认已登录管理员）</div>}
+      <div className="metric-color-group">
+        <div className="metric-color-group-title">暗色背景</div>
+        <div className="dark-depth-control">
+          <div className="dark-depth-presets" role="group" aria-label="暗色深度预设">
+            {DARK_DEPTH_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                className="dark-depth-preset"
+                data-active={darkDepth === preset.value ? "true" : "false"}
+                data-depth={preset.value}
+                aria-pressed={darkDepth === preset.value}
+                title={preset.title}
+                onClick={() => setDarkDepth(preset.value)}
+              >
+                <span className="dark-depth-preset-swatch" aria-hidden />
+                <span>{preset.label}</span>
+              </button>
+            ))}
+          </div>
+          <label className="dark-depth-range">
+            <span className="dark-depth-range-head">
+              <span>黑色程度</span>
+              <output>{darkDepth}%</output>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={darkDepth}
+              aria-label="黑色程度"
+              onChange={(event) => setDarkDepth(Number(event.target.value))}
+            />
+          </label>
+          {resolvedAppearance !== "dark" && (
+            <p className="dark-depth-hint">切换到深色模式后查看实际效果</p>
+          )}
+        </div>
+      </div>
       {METRIC_COLOR_GROUPS.map((group) => (
         <div className="metric-color-group" key={group.id}>
           <div className="metric-color-group-title">{group.label}</div>

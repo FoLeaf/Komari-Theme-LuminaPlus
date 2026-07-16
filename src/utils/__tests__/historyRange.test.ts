@@ -12,6 +12,19 @@ describe("history range metadata", () => {
     expect(
       historyChartRangeSeconds({ rangeStartMs: 1_000_000, rangeEndMs: 4_600_000 }),
     ).toEqual([1_000, 4_600]);
+    expect(
+      historyChartRangeSeconds({ rangeStartMs: 4_600_000, rangeEndMs: 1_000_000 }),
+    ).toBeNull();
+  });
+
+  it("rejects inverted actual coverage", () => {
+    expect(
+      historyCoverageLabel(
+        { rangeStartMs: 1_000_000, rangeEndMs: 4_600_000, intervalSeconds: 60 },
+        4_000,
+        2_000,
+      ),
+    ).toBeNull();
   });
 
   it("makes incomplete retention coverage explicit", () => {

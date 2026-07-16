@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
 import { Flag } from "@/components/ui/Flag";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,7 +29,9 @@ import {
 import { getDisplayRegionCode } from "@/utils/geo";
 import { useHomeSort } from "@/hooks/useHomeSort";
 import { useHomeNodeOrder } from "@/hooks/useHomeNodeOrder";
+import { useHourlyClock } from "@/hooks/useClock";
 import { preloadAssetsPage } from "@/services/assetsPageLoader";
+import { preloadTodayTrafficStats } from "@/hooks/useTodayTrafficStats";
 import { HomeSortControl } from "./HomeSortControl";
 import {
   getOverviewRating,
@@ -37,24 +39,21 @@ import {
 } from "@/utils/overviewRating";
 import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
-import { MiniNodeCard } from "./MiniNodeCard";
 import { NodeCard } from "./NodeCard";
 import { NodeListView } from "./NodeListView";
 import { RenewalReminder } from "./RenewalReminder";
 import type { NodeViewMode } from "@/utils/themeSettings";
 import type { NodeInfo } from "@/types/komari";
 
-// 每档视图各自的网格密度(gap/最小列宽)。迷你档改由 .node-grid-mini 固定列数,minColumnWidth 不用。
+// 卡片视图网格密度；列表档由独立组件布局。
 const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
   large: { className: "grid gap-4 xl:gap-5", minColumnWidth: 360 },
   compact: { className: "grid gap-3 xl:gap-4", minColumnWidth: 340 },
-  mini: { className: "grid gap-3 xl:gap-3.5", minColumnWidth: 260 },
-  // 列表档不走卡片网格(单独渲染 NodeListView),这两个值用不到,占位以满足 Record 穷尽。
+  // 占位以满足 Record 穷尽。
   list: { className: "", minColumnWidth: 0 },
 };
 
-// 把多个 uuid 拼成单个签名串作为 memo key。逗号安全:uuid 是标准 UUID
-// ([0-9a-f-]),永远不含逗号。
+// 标准 UUID 不含逗号，可安全拼成稳定签名。
 const UUID_KEY_SEPARATOR = ",";
 
 type IdleCapableWindow = Window & {
@@ -77,8 +76,23 @@ function formatCompactBytes(value: number): string {
   return `${amount}${unit[0]}`;
 }
 
-// 首页只保留站点身份。铭牌由 CSS 放进 AppShell 已有的顶部留白，不参与概览卡内容流，
-// 因此不会再把第一排 KPI 向下推；节点/在线/地区等重复信息由概览卡和地区栏承担。
+function TrafficBarsIcon({ size = 19 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden
+    >
+      <rect x="2" y="10" width="4" height="8" rx="1.2" fill="currentColor" />
+      <rect x="8" y="5.5" width="4" height="12.5" rx="1.2" fill="currentColor" />
+      <rect x="14" y="2" width="4" height="16" rx="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+// 站点铭牌由 CSS 放进 AppShell 顶部留白，不占概览卡内容流。
 function HomeBrand({ siteName }: { siteName: string }) {
   return (
     <header className="home-brand" aria-label="站点名称">
@@ -104,6 +118,7 @@ function HomeOverviewCards({
   showDetailButton,
   renewalNodes,
   dense,
+  onWarmTraffic,
 }: {
   siteName: string;
   overview: HomeOverview;
@@ -119,6 +134,7 @@ function HomeOverviewCards({
   assetRatingLabels: string;
   showDetailButton: boolean;
   renewalNodes: NodeInfo[];
+  onWarmTraffic: () => void;
 }) {
   const [trafficValue, trafficUnit] = formatBytes(
     overview.trafficUp + overview.trafficDown,
@@ -204,7 +220,19 @@ function HomeOverviewCards({
       </article>
 
       <article className="overview-card" data-metric="traffic">
-        <span className="overview-card-label">累计流量</span>
+        <div className="overview-card-head">
+          <span className="overview-card-label">累计流量</span>
+          <Link
+            to="/traffic"
+            className="overview-card-action"
+            aria-label="打开今日流量统计页"
+            title="今日流量统计"
+            onPointerEnter={onWarmTraffic}
+            onFocus={onWarmTraffic}
+          >
+            <TrafficBarsIcon />
+          </Link>
+        </div>
         <div className="overview-card-main">
           <p className="overview-card-value">
             {trafficValue}
@@ -223,7 +251,10 @@ function HomeOverviewCards({
       <article className="overview-card" data-metric="bandwidth">
         <span className="overview-card-label">实时带宽</span>
         <div className="overview-card-main">
-          <p className="overview-card-value" style={{ color: speedRateColor(rate.unit) }}>
+          <p
+            className="overview-card-value"
+            style={{ color: speedRateColor(rate.unit) }}
+          >
             {rate.value}
             <span className="overview-card-unit">{rate.unit}</span>
           </p>
@@ -264,11 +295,10 @@ function GroupTabs({
   onSelectGroup: (group: string) => void;
 }) {
   return (
-    <div className="home-group-tabs" role="tablist" aria-label="节点分组">
+    <div className="home-group-tabs" role="group" aria-label="节点分组">
       <button
         type="button"
-        role="tab"
-        aria-selected={selectedGroup === HOME_ALL_GROUP}
+        aria-pressed={selectedGroup === HOME_ALL_GROUP}
         data-active={selectedGroup === HOME_ALL_GROUP ? "true" : "false"}
         onClick={() => onSelectGroup(HOME_ALL_GROUP)}
       >
@@ -278,8 +308,7 @@ function GroupTabs({
         <button
           key={group}
           type="button"
-          role="tab"
-          aria-selected={selectedGroup === group}
+          aria-pressed={selectedGroup === group}
           data-active={selectedGroup === group ? "true" : "false"}
           onClick={() => onSelectGroup(group)}
           title={group}
@@ -329,6 +358,8 @@ function RegionTabs({
 }
 
 export function NodeGrid() {
+  const now = useHourlyClock();
+  const queryClient = useQueryClient();
   const nodes = useHomeNodeSummaries();
   const allMeta = useAllNodeMeta();
   const { data: me } = useAuth();
@@ -345,10 +376,7 @@ export function NodeGrid() {
   const [selectedRegion, setSelectedRegion] = useState(HOME_ALL_REGION);
   useHomepagePingOverview();
 
-  // 主题级「隐藏节点」:按名称/UUID 命中的节点彻底移除。名称匹配需要完整 meta(摘要无 name),
-  // 所以在 allMeta 上算出 uuid 集合,再同时应用到卡片摘要(显示/总览/分组)与费用 meta。
-  // 整个 NodeGrid 在 themeSettings.isReady 之前只渲染 Spinner(见下方早退),而隐藏列表就在
-  // 同一 config 里,所以节点首次渲染时隐藏已生效——不会先显示再消失地闪烁。
+  // 摘要不含名称，先从完整 meta 解析主题隐藏列表，再统一过滤各类数据。
   const hiddenUuids = useMemo(
     () => collectMatchingNodeUuids(allMeta, themeSettings.hiddenNodes),
     [allMeta, themeSettings.hiddenNodes],
@@ -360,9 +388,7 @@ export function NodeGrid() {
       ),
     [me?.logged_in, nodes, hiddenUuids],
   );
-  // 与卡片摘要(visibleNodes)同一可见性口径:后台 hidden 仅登录管理员可见、访客一律剔除,
-  // 主题级隐藏对所有人剔除。资产统计(数量/总额/明细)走这份 meta,否则访客虽看不到隐藏卡片,
-  // 却仍能从资产概览/明细里读到隐藏节点的名称、价格、到期。
+  // 资产统计与卡片使用同一可见性规则，避免泄露隐藏节点信息。
   const visibleMeta = useMemo(
     () =>
       allMeta.filter(
@@ -370,6 +396,13 @@ export function NodeGrid() {
       ),
     [allMeta, me?.logged_in, hiddenUuids],
   );
+  const trafficUuids = useMemo(
+    () => visibleMeta.map((node) => node.uuid),
+    [visibleMeta],
+  );
+  const warmTrafficPage = useCallback(() => {
+    void preloadTodayTrafficStats(queryClient, trafficUuids, Date.now());
+  }, [queryClient, trafficUuids]);
   // 「名称」排序需要展示名(摘要无 name),从 meta 注入。
   const nameByUuid = useMemo(() => {
     const map = new Map<string, string>();
@@ -404,9 +437,7 @@ export function NodeGrid() {
   }, [visibleNodes]);
   const showHomeOverview = themeSettings.isReady && themeSettings.showHomeOverview;
   const hasNodes = visibleMeta.length > 0;
-  // 资产概览卡片(剩余价值)始终显示,这样切换花费相关设置不会让整行重排。
-  // showCostSummary 控制卡片右上角的资产页入口;悬浮球是兜底入口,只在卡内入口
-  // 不显示时出现(总览隐藏或其开关关闭),两个入口不会同时出现。
+  // 卡内入口与悬浮入口互斥，避免重复操作入口。
   const showAssetCard = showHomeOverview && hasNodes;
   const showCostDetailButton =
     showAssetCard && themeSettings.isReady && themeSettings.showCostSummary;
@@ -430,12 +461,19 @@ export function NodeGrid() {
     return () => window.clearTimeout(handle);
   }, [showCostDetailButton, showCostFloatingButton]);
 
-  // 资产卡或悬浮球在场都预热汇率查询:资产卡自身要显示剩余价值,悬浮球场景则让
-  // 价格排序与 /assets 页(同一 query key)有现成数据。
+  useEffect(() => {
+    if (!showHomeOverview || !hasNodes) return;
+
+    // 今日页体积很小，首页稳定后尽早预取数据，让点击入口时直接命中查询缓存。
+    const handle = window.setTimeout(warmTrafficPage, 250);
+    return () => window.clearTimeout(handle);
+  }, [hasNodes, showHomeOverview, warmTrafficPage]);
+
+  // 资产入口存在时预热汇率，供概览、价格排序和资产页复用。
   const costNeeded = showAssetCard || showCostFloatingButton;
   const rateQuery = useQuery({
     queryKey: ["cost-rates", themeSettings.costRateApiUrl],
-    queryFn: () => getExchangeRates(themeSettings.costRateApiUrl),
+    queryFn: ({ signal }) => getExchangeRates(themeSettings.costRateApiUrl, { signal }),
     staleTime: 60 * 60 * 1000,
     // 「价格」排序也要汇率换算月化价,即便没显示资产卡也得拉一次;但空列表无需拉。
     enabled: (costNeeded || sortField === "price") && hasNodes,
@@ -449,9 +487,10 @@ export function NodeGrid() {
             themeSettings.costIgnoredNodes,
             rateQuery.data.rates,
             themeSettings.costPremiums,
+            now,
           )
         : null,
-    [visibleMeta, themeSettings.costIgnoredNodes, themeSettings.costPremiums, rateQuery.data],
+    [now, visibleMeta, themeSettings.costIgnoredNodes, themeSettings.costPremiums, rateQuery.data],
   );
   // 「价格」排序键:月化价格(CNY);免费/忽略/汇率缺失的节点 null,排到默认序之后。
   const priceByUuid = useMemo(() => {
@@ -523,9 +562,13 @@ export function NodeGrid() {
     }
   }, [themeSettings.showRegionBar, selectedRegion]);
 
-  // summary 对象每隔约 1s tick 就换新引用,导致 filteredNodes(以及直接映射 uuid)
-  // 不停重建。改用稳定的 uuid 签名作为卡片列表的 key,这样只有集合或顺序真正变化时
-  // 才重渲染——每张卡各自订阅自己的 store 切片、独立更新。
+  useEffect(() => {
+    if (!themeSettings.showGroupTabs && selectedGroup !== HOME_ALL_GROUP) {
+      setSelectedGroup(HOME_ALL_GROUP);
+    }
+  }, [themeSettings.showGroupTabs, selectedGroup]);
+
+  // 卡片列表只随 UUID 集合/顺序变化；卡片内部各自订阅实时数据。
   const uuidsKey = useMemo(
     () => orderedNodes.map((node) => node.uuid).join(UUID_KEY_SEPARATOR),
     [orderedNodes],
@@ -541,9 +584,7 @@ export function NodeGrid() {
         ? null
         : orderedUuids.map((uuid) => (
             <div key={uuid} className="min-w-0">
-              {mode === "mini" ? (
-                <MiniNodeCard uuid={uuid} />
-              ) : mode === "compact" ? (
+              {mode === "compact" ? (
                 <CompactNodeCard uuid={uuid} />
               ) : (
                 <NodeCard uuid={uuid} />
@@ -554,24 +595,19 @@ export function NodeGrid() {
   );
   const showGroupTabs =
     themeSettings.isReady && themeSettings.showGroupTabs && groupOptions.length > 0;
+  const showHomeSort = sortEnabled && visibleNodes.length > 1;
   // 地区栏:只有一个地区时筛选无意义,>1 才显示。
   const showRegionBar =
     themeSettings.isReady && themeSettings.showRegionBar && regionOptions.length > 1;
-  // 节点多于一个才有排序意义;空/单节点时不显示控件。
-  const showHomeSort = sortEnabled && visibleNodes.length > 1;
-  // 分组标签栏与卡片网格共用列定义,让标签栏左缘对齐首卡。迷你档用 .node-grid-mini 固定列数,
-  // 不写内联 gridTemplateColumns(内联会盖过 class);其余档按最小列宽 auto-fill。
-  const isMini = mode === "mini";
+  // 分组标签栏与卡片网格共用列定义，让标签栏左缘对齐首卡。
   const isList = mode === "list";
   const { className: gridClassName, minColumnWidth } = GRID_LAYOUT[mode];
-  const gridWrapClassName = isMini ? `${gridClassName} node-grid-mini` : gridClassName;
-  const gridStyle = isMini
+  const gridWrapClassName = gridClassName;
+  const gridStyle = isList
     ? undefined
     : { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))` };
-  // 控件栏统一走卡片网格形式(分组标签占首列、排序钉末列右对齐)。迷你/列表档不套用各自的
-  // 卡片列宽(迷你的固定列会把分组栏压成一张迷你卡宽,与大卡小卡不一致),统一借用小卡列定义,
-  // 让四档的分组栏/排序排布保持同一套设计语言。
-  const borrowControlsGrid = isMini || isList;
+  // 列表档的分组栏借用小卡列宽。
+  const borrowControlsGrid = isList;
   const controlsWrapClassName = borrowControlsGrid
     ? "grid gap-3 home-controls-bar mb-4"
     : `${gridWrapClassName} home-controls-bar mb-4`;
@@ -607,7 +643,7 @@ export function NodeGrid() {
         <HomeOverviewCards
           siteName={siteName}
           overview={overview}
-          dense={mode === "mini" || mode === "list"}
+          dense={mode === "list"}
           showDetailButton={showCostDetailButton}
           renewalNodes={visibleMeta}
           costSummary={costSummary}
@@ -619,6 +655,7 @@ export function NodeGrid() {
           trafficRatingLabels={themeSettings.trafficRatingLabels}
           bandwidthRatingLabels={themeSettings.bandwidthRatingLabels}
           assetRatingLabels={themeSettings.assetRatingLabels}
+          onWarmTraffic={warmTrafficPage}
         />
       )}
     </>
@@ -640,7 +677,7 @@ export function NodeGrid() {
     <>
       {homeHeader}
       {(showGroupTabs || showHomeSort) && (
-        // 分组标签落首列(左缘对齐首卡)、排序钉末列右对齐;窄屏只剩 1 列时排序自动换到下一行。
+        // 分组标签落首列、排序钉在末列右侧；窄屏时两者保持在同一控件栏内。
         <div className={controlsWrapClassName} style={controlsStyle}>
           {showGroupTabs && (
             <GroupTabs

@@ -3,6 +3,8 @@ import type { PingTaskStats } from "@/types/komari";
 import {
   mergePingMetricSeries,
   pingTasksFromMetricStats,
+  reconcilePingMetricStats,
+  resolvePingSampleCounts,
   resolvePingChartInterval,
   PING_LATENCY_METRIC,
   PING_LOSS_METRIC,
@@ -64,6 +66,80 @@ describe("resolvePingChartInterval", () => {
   it("uses the 7-day rollup interval instead of splitting points by the raw task cadence", () => {
     expect(resolvePingChartInterval(15 * 60, 60)).toBe(15 * 60);
     expect(resolvePingChartInterval(undefined, 60)).toBe(60);
+  });
+});
+
+describe("resolvePingSampleCounts", () => {
+  it("uses aggregate count and loss percentage instead of treating a bucket as one sample", () => {
+    expect(resolvePingSampleCounts({ value: 45, count: 20, loss: 25 })).toEqual({
+      total: 20,
+      lost: 5,
+      valid: 15,
+    });
+  });
+
+  it("falls back safely for malformed metadata and keeps legacy loss records", () => {
+    expect(resolvePingSampleCounts({ value: 12, count: Number.NaN, loss: Number.NaN })).toEqual({
+      total: 1,
+      lost: 0,
+      valid: 1,
+    });
+    expect(resolvePingSampleCounts({ value: -1 })).toEqual({
+      total: 1,
+      lost: 1,
+      valid: 0,
+    });
+  });
+});
+
+describe("reconcilePingMetricStats", () => {
+  it("recomputes count, loss and average from repaired aggregate records", () => {
+    const base: PingTaskStats = {
+      client: CLIENT,
+      taskId: 7,
+      name: "广州探测",
+      type: "icmp",
+      interval: 60,
+      total: 2,
+      valid: 2,
+      loss: 0,
+      min: 20,
+      max: 80,
+      avg: 30,
+      latest: 35,
+      p50: 36,
+      p99: 79,
+      stddev: 5,
+      p99P50Ratio: 1.1,
+    };
+
+    const [reconciled] = reconcilePingMetricStats([base], [
+      {
+        client: CLIENT,
+        task_id: 7,
+        time: TIME,
+        value: 40,
+        count: 4,
+        loss: 25,
+      },
+      {
+        client: CLIENT,
+        task_id: 7,
+        time: "2026-07-13T02:01:00Z",
+        value: 70,
+        count: 2,
+        loss: 50,
+      },
+    ]);
+
+    expect(reconciled).toMatchObject({
+      total: 6,
+      valid: 4,
+      avg: 47.5,
+      latest: 35,
+      p99: 79,
+    });
+    expect(reconciled.loss).toBeCloseTo(100 / 3, 10);
   });
 });
 

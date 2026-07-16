@@ -4,8 +4,6 @@ const ASCII_ALPHA_START = 0x41;
 const FLAG_EMOJI_RE = /[\u{1F1E6}-\u{1F1FF}]{2}/u;
 const ISO_CODE_RE = /\b[A-Z]{2}\b/g;
 
-// ISO-3166-1 alpha-2(外加 UI 当成国旗渲染的少数伪代码),用来在接受一个宽松的双字母 token 前校验它,
-// 这样像 "GO Cloud" 或 "MY Server"→"GO"/"MY" 这类自由文本只有在 token 是真实代码时才会解析。
 const ISO_3166_ALPHA2 = new Set(
   (
     "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ " +
@@ -65,8 +63,6 @@ const REGION_ALIASES: Record<string, string> = {
   uk: "GB",
   uae: "AE",
   "united arab emirates": "AE",
-  // 用无空格的 key 就够:getCountryCodeFromRegion 会去掉所有空白再查一次,所以带空格的变体
-  // ("united kingdom" 等)无需单独加条目也能命中这里。
   unitedkingdom: "GB",
   unitedstates: "US",
   us: "US",
@@ -165,8 +161,6 @@ export function getCountryCodeFromRegion(region: string | null | undefined): str
   const emoji = raw.match(FLAG_EMOJI_RE)?.[0];
   if (emoji) return countryCodeFromFlagEmoji(emoji);
 
-  // 命名地区(如 "China"、"中国"、"DE Frankfurt"→"de frankfurt")先于宽松 ISO 正则解析,免得像
-  // "OK Cloud" 里 "OK" 这种乱入的双字母 token 盖掉真正的别名匹配。
   const normalized = raw
     .toLowerCase()
     .replace(/[_-]+/g, " ")
@@ -176,17 +170,14 @@ export function getCountryCodeFromRegion(region: string | null | undefined): str
   if (aliased) return aliased;
 
   const upper = raw.toUpperCase();
-  // "UK" 是 GB 常见的非 ISO 同义写法。
   const resolveToken = (token: string) => (token === "UK" ? "GB" : token);
   const isValidToken = (token: string) =>
     token === "UK" || ISO_3166_ALPHA2.has(token);
 
-  // 优先匹配整串的 ISO 代码;只有像 "DE Frankfurt" 这种代码嵌在自由文本里的输入才退而用 token 匹配。
-  // 两条路径都必须是真实代码,免得乱入的词("GO Cloud")解析出假国旗。
   const whole = upper.match(/^[A-Z]{2}$/)?.[0];
   if (whole && isValidToken(whole)) return resolveToken(whole);
 
-  for (const match of upper.matchAll(ISO_CODE_RE)) {
+  for (const match of raw.matchAll(ISO_CODE_RE)) {
     const token = match[0];
     if (isValidToken(token)) return resolveToken(token);
   }

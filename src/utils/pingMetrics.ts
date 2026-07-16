@@ -3,7 +3,7 @@ import type { PingRecord, PingTask, PingTaskStats } from "@/types/komari";
 export const PING_LATENCY_METRIC = "ping.latency_ms";
 export const PING_LOSS_METRIC = "ping.loss";
 
-export interface PingMetricPoint {
+interface PingMetricPoint {
   time: string;
   value: number | null;
   count: number;
@@ -13,6 +13,7 @@ export interface PingMetricSeries {
   metricKey: string;
   client: string;
   tags: Record<string, string>;
+  intervalSeconds?: number;
   points: PingMetricPoint[];
 }
 
@@ -23,6 +24,23 @@ function parseTaskId(tags: Record<string, string>) {
 
 function seriesKey(client: string, taskId: number) {
   return `${client}\u0000${taskId}`;
+}
+
+export function resolvePingSampleCounts(
+  sample: Pick<PingRecord, "value" | "count" | "loss">,
+) {
+  const total =
+    typeof sample.count === "number" && Number.isFinite(sample.count) && sample.count > 0
+      ? Math.max(1, Math.round(sample.count))
+      : 1;
+  const reportedLoss = sample.loss;
+  const lost =
+    typeof reportedLoss === "number" && Number.isFinite(reportedLoss)
+      ? Math.min(total, Math.max(0, Math.round((reportedLoss / 100) * total)))
+      : sample.value < 0
+        ? total
+        : 0;
+  return { total, lost, valid: total - lost };
 }
 
 function pointTimeKey(time: string) {
@@ -114,6 +132,47 @@ export function mergePingMetricSeries(series: PingMetricSeries[]): PingRecord[] 
     return left.task_id - right.task_id;
   });
   return records;
+}
+
+export function reconcilePingMetricStats(
+  stats: PingTaskStats[],
+  records: PingRecord[],
+): PingTaskStats[] {
+  const totals = new Map<
+    string,
+    { total: number; valid: number; lost: number; latencySum: number }
+  >();
+
+  for (const record of records) {
+    if (!record.client || !Number.isFinite(record.task_id)) continue;
+    const { total: count, lost, valid } = resolvePingSampleCounts(record);
+    const key = seriesKey(record.client, record.task_id);
+    const current = totals.get(key) ?? {
+      total: 0,
+      valid: 0,
+      lost: 0,
+      latencySum: 0,
+    };
+    current.total += count;
+    current.valid += valid;
+    current.lost += lost;
+    if (record.value >= 0 && valid > 0) {
+      current.latencySum += record.value * valid;
+    }
+    totals.set(key, current);
+  }
+
+  return stats.map((stat) => {
+    const total = totals.get(seriesKey(stat.client, stat.taskId));
+    if (!total || total.total <= 0) return stat;
+    return {
+      ...stat,
+      total: total.total,
+      valid: total.valid,
+      loss: (total.lost / total.total) * 100,
+      avg: total.valid > 0 ? total.latencySum / total.valid : null,
+    };
+  });
 }
 
 /** 把按节点返回的统计行去重成旧 UI 使用的任务清单。 */

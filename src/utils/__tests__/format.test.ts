@@ -5,9 +5,11 @@ import {
   formatByteRateLabel,
   formatExpireDays,
   formatTrafficRateLabel,
+  formatUptimeDays,
   getExpireDaysRemaining,
   parseTags,
   resolveExpireTimestamp,
+  trimFixed,
 } from "@/utils/format";
 
 const KB = 1024;
@@ -66,6 +68,14 @@ describe("formatByteRate / formatByteRateLabel", () => {
     expect(formatByteRateLabel(KB)).toBe("1.00 KB/s");
     expect(formatByteRateLabel(MB)).toBe("1.00 MB/s");
     expect(formatByteRateLabel(2.5 * GB)).toBe("2.50 GB/s");
+  });
+});
+
+describe("finite formatting", () => {
+  it("does not expose non-finite values", () => {
+    expect(trimFixed(Number.POSITIVE_INFINITY, 1)).toBe("0");
+    expect(formatUptimeDays(Number.POSITIVE_INFINITY)).toEqual({ value: "—", unit: "" });
+    expect(getExpireDaysRemaining("2026-06-14T12:00:00.000Z", Infinity)).toBeNull();
   });
 });
 

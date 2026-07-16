@@ -16,7 +16,7 @@ function getCachedResolvedThemeSettings(raw: RawThemeSettings): ResolvedThemeSet
   return cachedResolvedThemeSettings;
 }
 
-export type ThemeSettingsState = ResolvedThemeSettings & {
+type ThemeSettingsState = ResolvedThemeSettings & {
   /**
    * 服务端 config 到达后为 true。config 请求失败时它也会变 true，
    * 让应用回退到默认值，而不是一直空白。

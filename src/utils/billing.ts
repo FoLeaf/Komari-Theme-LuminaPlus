@@ -19,7 +19,7 @@ function isLongTermExpire(value: string | number | null | undefined) {
   return days != null && days > LONG_TERM_EXPIRE_DAYS;
 }
 
-export type BillingCycleKind = "month" | "quarter" | "halfYear" | "year" | "lifetime";
+type BillingCycleKind = "month" | "quarter" | "halfYear" | "year" | "lifetime";
 
 /**
  * 把自由文本的账单周期关键词(须预先 lowercase/trim)归类成标准周期,识别不出时返回 null。

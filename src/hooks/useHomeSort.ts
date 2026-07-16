@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import {
   HOME_SORT_NATURAL_DIRECTION,
@@ -8,9 +8,9 @@ import {
   type HomeSortField,
 } from "@/utils/homeSort";
 
-// 访客首页排序偏好。仿 useViewMode:管理员设站点默认(themeSettings),访客的临时选择写
-// sessionStorage 覆盖;选回与默认一致即清除覆盖(将来站长改默认仍能生效)。单一消费者(NodeGrid)
-// 持有,再把状态下发给排序控件,避免多实例各存一份而分叉。
+// 访客首页排序偏好。管理员设站点默认(themeSettings),访客的临时选择写 sessionStorage 覆盖;
+// 选回与默认一致即清除覆盖(将来站长改默认仍能生效)。NodeGrid 与右上角悬浮控件会分别
+// 调用这个 hook，因此用模块级 external store 保证两处始终读取同一份即时状态。
 const OVERRIDE_KEY = "komaritheme:home-sort";
 
 interface SortPref {
@@ -48,6 +48,39 @@ function clearOverride() {
   }
 }
 
+const listeners = new Set<() => void>();
+let overrideSnapshot: SortPref | null = null;
+let snapshotInitialized = false;
+
+function samePref(left: SortPref | null, right: SortPref | null) {
+  return left?.field === right?.field && left?.dir === right?.dir;
+}
+
+function refreshSnapshot() {
+  const next = readOverride();
+  if (!samePref(overrideSnapshot, next)) overrideSnapshot = next;
+  return overrideSnapshot;
+}
+
+function getSnapshot() {
+  if (!snapshotInitialized) {
+    snapshotInitialized = true;
+    refreshSnapshot();
+  }
+  return overrideSnapshot;
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function emitChange(next: SortPref | null) {
+  overrideSnapshot = next;
+  snapshotInitialized = true;
+  listeners.forEach((listener) => listener());
+}
+
 export interface HomeSortControlState {
   field: HomeSortField;
   direction: HomeSortDirection;
@@ -59,7 +92,7 @@ export function useHomeSort(): HomeSortControlState {
   const themeSettings = useThemeSettings();
   const defaultField = themeSettings.homeSortField;
   const defaultDir = themeSettings.homeSortDirection;
-  const [override, setOverride] = useState<SortPref | null>(() => readOverride());
+  const override = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const field = override?.field ?? defaultField;
   const direction = override?.dir ?? defaultDir;
@@ -68,10 +101,10 @@ export function useHomeSort(): HomeSortControlState {
     (next: SortPref) => {
       if (next.field === defaultField && next.dir === defaultDir) {
         clearOverride();
-        setOverride(null);
+        emitChange(null);
       } else {
         writeOverride(next);
-        setOverride(next);
+        emitChange(next);
       }
     },
     [defaultField, defaultDir],

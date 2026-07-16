@@ -28,6 +28,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
       - name: Build package
         run: npm run package
 
@@ -46,7 +52,8 @@ jobs:
         run: |
           notes=".github/release-notes/${GITHUB_REF_NAME}.md"
           if [[ ! -f "$notes" ]]; then
-            notes=".github/release-notes/v1.1.4.md"
+            echo "::error::Missing release notes: $notes"
+            exit 1
           fi
           echo "path=$notes" >> "$GITHUB_OUTPUT"
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
-  ensureStarted,
+  retainStore,
   getAllNodeMetaSnapshot,
   getHomeNodeSummariesSnapshot,
   getNodeMetaSnapshot,
@@ -23,12 +23,16 @@ const noopUnsubscribe = () => undefined;
 
 function useEnsured(enabled = true) {
   useEffect(() => {
-    if (enabled) ensureStarted();
+    if (enabled) return retainStore();
   }, [enabled]);
 }
 
 export function useNodeMeta(uuid: string): NodeInfo | undefined {
   useEnsured();
+  return useNodeMetaSnapshot(uuid);
+}
+
+function useNodeMetaSnapshot(uuid: string): NodeInfo | undefined {
   const subscribe = useCallback(
     (callback: () => void) => subscribeToNodeMeta(uuid, callback),
     [uuid],
@@ -39,6 +43,10 @@ export function useNodeMeta(uuid: string): NodeInfo | undefined {
 
 export function useNodeMetrics(uuid: string, enabled = true): NodeMetrics | undefined {
   useEnsured(enabled);
+  return useNodeMetricsSnapshot(uuid, enabled);
+}
+
+function useNodeMetricsSnapshot(uuid: string, enabled = true): NodeMetrics | undefined {
   const subscribe = useCallback(
     (callback: () => void) =>
       enabled ? subscribeToNodeMetrics(uuid, callback) : noopUnsubscribe,
@@ -55,12 +63,27 @@ export function useNodeTrafficTrend(
   uuid: string,
 ): { up: TrafficTrendSample[]; down: TrafficTrendSample[] } {
   useEnsured();
+  return useNodeTrafficTrendSnapshot(uuid);
+}
+
+function useNodeTrafficTrendSnapshot(
+  uuid: string,
+): { up: TrafficTrendSample[]; down: TrafficTrendSample[] } {
   const subscribe = useCallback(
     (callback: () => void) => subscribeToNodeTrafficTrend(uuid, callback),
     [uuid],
   );
   const getSnapshot = useCallback(() => getNodeTrafficTrendSnapshot(uuid), [uuid]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function useNodeCardSnapshots(uuid: string) {
+  useEnsured();
+  return {
+    meta: useNodeMetaSnapshot(uuid),
+    metrics: useNodeMetricsSnapshot(uuid),
+    trafficTrend: useNodeTrafficTrendSnapshot(uuid),
+  };
 }
 
 export function useVisibleNodeUuids(includeHidden = false): string[] {
@@ -94,11 +117,25 @@ export function useHomeNodeSummaries(): HomeNodeSummary[] {
   );
 }
 
-export function useNodeStoreStatus() {
-  useEnsured();
+const EMPTY_STORE_STATUS = {
+  failureStreak: 0,
+  hydrated: false,
+  nodeInfoError: false,
+} as const;
+
+export function useNodeStoreStatus(enabled = true) {
+  useEnsured(enabled);
+  const subscribe = useCallback(
+    (listener: () => void) => (enabled ? subscribeStoreStatus(listener) : noopUnsubscribe),
+    [enabled],
+  );
+  const getSnapshot = useCallback(
+    () => (enabled ? getStoreStatusSnapshot() : EMPTY_STORE_STATUS),
+    [enabled],
+  );
   return useSyncExternalStore(
-    subscribeStoreStatus,
-    getStoreStatusSnapshot,
-    getStoreStatusSnapshot,
+    subscribe,
+    getSnapshot,
+    getSnapshot,
   );
 }

@@ -135,8 +135,8 @@ export interface NodeMetrics {
 
 export interface ThemeSettings {
   defaultAppearance?: "system" | "light" | "dark";
-  desktopNodeViewMode?: "large" | "compact" | "mini" | "list";
-  mobileNodeViewMode?: "large" | "compact" | "mini" | "list";
+  desktopNodeViewMode?: "large" | "compact" | "list";
+  mobileNodeViewMode?: "large" | "compact" | "list";
   enableAdminButton?: boolean;
   showPingChart?: boolean;
   homepagePingBindings?: Record<string, string[]>;

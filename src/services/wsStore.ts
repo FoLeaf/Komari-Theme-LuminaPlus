@@ -14,6 +14,8 @@ interface State {
 
 export interface StoreStatusSnapshot {
   failureStreak: number;
+  hydrated: boolean;
+  nodeInfoError: boolean;
 }
 
 export interface HomeNodeSummary {
@@ -48,8 +50,7 @@ interface NodeTrafficTrend {
 
 const LIVE_STATUS_REFRESH_INTERVAL_MS = 2_000;
 const NODE_INFO_REFRESH_INTERVAL_MS = 30_000;
-// 实时轮询每 2s 一次;单次请求超时设得远低于 RPC 默认的 30s,这样 half-open socket 能
-// 快速失败(暴露 failureStreak 并让下一 tick 重试),而不是冻结实时更新长达一分钟。
+// 较短超时可让 half-open 连接尽快重试。
 const LIVE_STATUS_REQUEST_TIMEOUT_MS = 8_000;
 const SCROLL_IDLE_DELAY_MS = 160;
 const TRAFFIC_TREND_SAMPLE_COUNT = 18;
@@ -134,14 +135,7 @@ function alignEmptyMetricsTotals(metrics: NodeMetrics, info: NodeInfo): NodeMetr
   };
 }
 
-// 直接透传节点累计流量计数(net_total_up/down)的某一方向 —— 包括计数器合理重置时的*下降*
-//(agent 重装、计费周期翻转),让概览总量和每节点流量限额条始终对齐后端,而不是越飘越高。
-// 唯一的保护:缺失总量的帧会被 normalize 成 0,所以把 0 当作"本 tick 无采样",保持上一个值,
-// 避免局部实时帧把总量闪烁到 0。
-//
-// 这里有意替换掉之前基于 offset、为保持单调而在每次重置时携带旧总量的方案。那个方案会在每次
-// offline→online 抖动时悄悄抬高显示总量(每抖一次就把整个节点总量再加一遍),一个会话下来远超
-// 后端 —— 硬刷新时数值又跌回去然后再爬升。导出供单测使用。
+// 累计流量直接跟随后端计数器下降；0 视为本帧缺样，避免局部帧闪零。
 export function resolveTrafficTotal(previous: number, raw: number): number {
   return Number.isFinite(raw) && raw > 0 ? raw : previous;
 }
@@ -158,8 +152,6 @@ function mergeRealtime(
   rt: NodeRealtime,
   online: boolean,
 ): NodeMetrics {
-  // normalizeRealtime 已保证 ram/swap/disk 的 total（缺值时回退 metrics/meta 的总量）为数值，
-  // 故此处直接取用，无需再叠一层兜底。
   const ramUsed = rt.ram.used;
   const ramTotal = rt.ram.total;
   const swapUsed = rt.swap.used;
@@ -256,8 +248,7 @@ function shallowEqualNodeInfo(a: NodeInfo, b: NodeInfo) {
     a.traffic_limit === b.traffic_limit &&
     a.traffic_limit_type === b.traffic_limit_type &&
     a.created_at === b.created_at
-    // 有意排除 `updated_at`:后端每次写记录(约 30s)都会更新它,但它并不展示,比较它会
-    // 让每次 sync 都把所有节点标记为"变化"并重渲染整个 grid。
+    // updated_at 是未展示的心跳字段，不应触发整个节点列表重渲染。
   );
 }
 
@@ -316,10 +307,7 @@ function updateTrafficTrendSeries(
     opacity: safeValue > 0 ? 0.4 + level * 0.48 : 0.52,
   };
 
-  const buffer =
-    prevSeries.buffer.length === TRAFFIC_TREND_SAMPLE_COUNT
-      ? prevSeries.buffer
-      : new Array<TrafficTrendSample>(TRAFFIC_TREND_SAMPLE_COUNT);
+  const buffer = new Array<TrafficTrendSample>(TRAFFIC_TREND_SAMPLE_COUNT);
   const nextSize =
     prevSeries.size < TRAFFIC_TREND_SAMPLE_COUNT
       ? prevSeries.size + 1
@@ -333,7 +321,7 @@ function updateTrafficTrendSeries(
       ? (prevSeries.start + prevSeries.size) % TRAFFIC_TREND_SAMPLE_COUNT
       : prevSeries.start;
 
-  if (prevSeries.size > 0 && buffer !== prevSeries.buffer) {
+  if (prevSeries.size > 0) {
     for (let i = 0; i < prevSeries.size; i++) {
       buffer[(prevSeries.start + i) % TRAFFIC_TREND_SAMPLE_COUNT] =
         prevSeries.buffer[(prevSeries.start + i) % TRAFFIC_TREND_SAMPLE_COUNT]!;
@@ -370,7 +358,11 @@ let allNodeMetaSnapshot: NodeInfo[] = [];
 let allNodeMetaSnapshotVersion = -1;
 let homeNodeSummariesSnapshot: HomeNodeSummary[] = [];
 let homeNodeSummariesSnapshotVersion = -1;
-let storeStatusSnapshot: StoreStatusSnapshot = { failureStreak: 0 };
+let storeStatusSnapshot: StoreStatusSnapshot = {
+  failureStreak: 0,
+  hydrated: false,
+  nodeInfoError: false,
+};
 let scrollIdleTimer: number | null = null;
 let scrollTrackingStarted = false;
 let scrollActive = false;
@@ -399,7 +391,6 @@ function emitMappedListeners(
   }
 }
 
-// touches.meta/metrics 是集合;空集合也是 truthy,所以不能直接对它们取 Boolean。
 function hasAny(items: Iterable<string> | undefined): boolean {
   if (!items) return false;
   return !items[Symbol.iterator]().next().done;
@@ -407,12 +398,9 @@ function hasAny(items: Iterable<string> | undefined): boolean {
 
 function commit(next: State, touches: CommitTouches = {}) {
   state = next;
-  // 每次 state 转换都自增。派生列表的 snapshot 用它做缓存 key,这样 getSnapshot(每次 React
-  // 渲染都会调用)在上次调用后没有 commit 时能 O(1) 返回缓存引用。
+  // 派生快照以 storeVersion 作缓存键。
   storeVersion += 1;
-  // home-summary 派生自 order/meta/metrics。旧写法直接 Boolean(集合),空集合也 truthy,会在
-  // 仅 storeStatus 变化(如 refreshLatestStatus 恢复 failureStreak 时传空 metrics:[])等场景
-  // 误广播 NodeGrid/InstanceSwitcher,白触发一次 O(n) 快照重建。改为判集合非空。
+  // 空集合也是 truthy，需检查内容才能避免误广播。
   const homeTouched =
     Boolean(touches.nodeList || touches.allNodes) ||
     hasAny(touches.meta) ||
@@ -462,7 +450,9 @@ function asNumber(value: unknown, fallback = 0): number {
 }
 
 function asRecord(value: unknown): RealtimePayload {
-  return value && typeof value === "object" ? (value as RealtimePayload) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as RealtimePayload)
+    : {};
 }
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
@@ -496,10 +486,7 @@ function toTimestamp(value: string | number | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-// 从扁平的 latest-status payload 推导 TCP 连接数。该协议把 `connections` 作为 TCP+UDP 合计
-//(见 common.go)发送,没有 `connections_tcp`,所以直接把 `connections` 当 TCP 会让 "TCP 连接"
-// 统计虚高一个 UDP 数。这里用 connections − udp 推导,未来后端若提供显式 `connections_tcp`
-// 则优先用它。导出供单测使用。
+// 旧扁平协议的 connections 是 TCP+UDP 合计。
 export function resolveFlatConnectionsTcp(payload: RealtimePayload): number {
   if (payload.connections_tcp != null) return asNumber(payload.connections_tcp);
   return Math.max(0, asNumber(payload.connections) - asNumber(payload.connections_udp));
@@ -599,8 +586,7 @@ function normalizeRealtime(
 function applyLatestStatus(records: Record<string, unknown>) {
   const touchedMetrics = new Set<string>();
   const touchedTrafficTrends = new Set<string>();
-  // 懒克隆 map —— 安静的 tick(metric/trend 无变化)很常见,且调用方会丢弃未变的 map,
-  // 提前 spread 纯属浪费。syncNodeInfo 之后每个 order uuid 都已有 trend 条目,未变节点无需补齐。
+  // 安静 tick 不克隆整个索引。
   let nextMetricsByUuid = state.metricsByUuid;
   let nextTrafficTrends = state.trafficTrends;
 
@@ -662,30 +648,29 @@ function applyLatestStatus(records: Record<string, unknown>) {
 }
 
 let hydrated = false;
-let hydratePromise: Promise<void> | null = null;
+let nodeInfoError = false;
 let refreshInFlight = false;
-let nodeInfoInFlight = false;
-let lastNodeInfoSyncAt = 0;
+let nodeInfoPromise: Promise<void> | null = null;
+let liveStatusController: AbortController | null = null;
+let nodeInfoController: AbortController | null = null;
 
 function sortNodes(nodes: NodeInfo[]) {
-  return nodes
-    .map((node, index) => ({ node, index }))
-    .sort((a, b) => {
-      const byWeight = a.node.weight - b.node.weight;
-      return byWeight === 0 ? a.index - b.index : byWeight;
-    })
-    .map(({ node }) => node);
+  return [...nodes].sort((left, right) => left.weight - right.weight);
 }
 
-async function syncNodeInfo(force = false) {
-  if (nodeInfoInFlight) return;
-  if (!force && hydrated && Date.now() - lastNodeInfoSyncAt < NODE_INFO_REFRESH_INTERVAL_MS) {
-    return;
-  }
+function syncNodeInfo() {
+  nodeInfoPromise ??= performNodeInfoSync().finally(() => {
+    nodeInfoPromise = null;
+  });
+  return nodeInfoPromise;
+}
 
-  nodeInfoInFlight = true;
+async function performNodeInfoSync() {
+  const controller = new AbortController();
+  nodeInfoController = controller;
   try {
-    const nodes = sortNodes(await getNodes());
+    const nodes = sortNodes(await getNodes({ signal: controller.signal }));
+    if (controller.signal.aborted) return;
     const order = nodes.map((node) => node.uuid);
     const touchedMeta = new Set<string>();
     const touchedMetrics = new Set<string>();
@@ -699,9 +684,7 @@ async function syncNodeInfo(force = false) {
 
     for (const info of nodes) {
       const prev = state.metaByUuid[info.uuid];
-      // 展示内容无变化时复用旧 meta 对象,保持引用稳定,让 useSyncExternalStore 不重渲染卡片。
       const isUnchanged = prev != null && shallowEqualNodeInfo(prev, info);
-      // 有变化则克隆,给 meta 一个新引用(触发 useSyncExternalStore 重渲染);未变则复用 `prev`。
       const merged = isUnchanged ? prev : { ...info };
       metaByUuid[info.uuid] = merged;
       const previousMetrics = state.metricsByUuid[info.uuid];
@@ -736,13 +719,10 @@ async function syncNodeInfo(force = false) {
         return Boolean(prev?.hidden) !== Boolean(next?.hidden);
       });
 
+    const storeStatusChanged = !hydrated || nodeInfoError;
     hydrated = true;
-    hydratePromise = Promise.resolve();
-    lastNodeInfoSyncAt = Date.now();
-    // 零变化的 30s sync(order/meta/metrics 全没动)直接跳过 commit:此时新建的 order/metaByUuid/
-    // metricsByUuid/trafficTrends 与现有 state 逐元素同引用,commit 只会白自增 storeVersion(打掉
-    // 所有派生快照缓存)并广播 home-summary 订阅者,触发一次 O(n) 无效重算。稳态下几乎每个 tick 都命中。
-    if (orderChanged || touchedMeta.size > 0 || touchedMetrics.size > 0) {
+    nodeInfoError = false;
+    if (orderChanged || touchedMeta.size > 0 || touchedMetrics.size > 0 || storeStatusChanged) {
       commit(
         {
           ...state,
@@ -757,24 +737,19 @@ async function syncNodeInfo(force = false) {
           // traffic trend 只由 refreshLatestStatus 改动;syncNodeInfo 原样带过来,这里无需通知。
           nodeList: nodeListChanged,
           allNodes: orderChanged || touchedMeta.size > 0,
+          storeStatus: storeStatusChanged,
         },
       );
     }
-  } finally {
-    nodeInfoInFlight = false;
-  }
-}
-
-async function hydrate() {
-  if (hydrated) return;
-  if (hydratePromise) return hydratePromise;
-
-  hydratePromise = syncNodeInfo(true).catch((error) => {
-    hydratePromise = null;
+  } catch (error) {
+    if (!controller.signal.aborted && !nodeInfoError) {
+      nodeInfoError = true;
+      commit(state, { storeStatus: true });
+    }
     throw error;
-  });
-
-  return hydratePromise;
+  } finally {
+    if (nodeInfoController === controller) nodeInfoController = null;
+  }
 }
 
 async function refreshLatestStatus() {
@@ -785,10 +760,14 @@ async function refreshLatestStatus() {
   }
 
   refreshInFlight = true;
+  const controller = new AbortController();
+  liveStatusController = controller;
   try {
     const records = await getNodesLatestStatus([...state.order], {
       timeout: LIVE_STATUS_REQUEST_TIMEOUT_MS,
+      signal: controller.signal,
     });
+    if (controller.signal.aborted) return;
     const applied = applyLatestStatus(records);
     const metricsChanged = applied.touchedMetrics.length > 0;
     const trafficTrendsChanged = applied.touchedTrafficTrends.length > 0;
@@ -811,6 +790,7 @@ async function refreshLatestStatus() {
       );
     }
   } catch {
+    if (controller.signal.aborted) return;
     commit(
       {
         ...state,
@@ -819,13 +799,14 @@ async function refreshLatestStatus() {
       { storeStatus: true },
     );
   } finally {
+    if (liveStatusController === controller) liveStatusController = null;
     refreshInFlight = false;
   }
 }
 
 async function bootstrap() {
   try {
-    await hydrate();
+    await syncNodeInfo();
     await refreshLatestStatus();
   } catch {
     // 下一个调度 tick 再重试。
@@ -833,20 +814,19 @@ async function bootstrap() {
 }
 
 let started = false;
+let retainCount = 0;
+let stopTimer: number | null = null;
 let liveStatusTimer: number | null = null;
 let nodeInfoTimer: number | null = null;
 
-export function ensureStarted() {
+function ensureStarted() {
   if (started) return;
   started = true;
 
   ensureScrollTrackingStarted();
   void bootstrap();
-  // 两条独立节奏:实时 metrics 每 2s,节点列表/meta sync 走自己的 30s 节奏。之前它们共用
-  // 一条 await 链,跑慢速 /api/nodes 拉取的那个 tick 会拖住本周期的实时刷新。
+  // 实时指标与节点信息使用独立轮询节奏。
   liveStatusTimer = window.setInterval(() => {
-    // 首次 hydrate 成功前没有节点列表可轮询,所以按快节奏持续重试 bootstrap(沿用旧的单链
-    // 行为);hydrate 完成后切到纯实时刷新。
     if (!hydrated) {
       void bootstrap();
       return;
@@ -854,13 +834,40 @@ export function ensureStarted() {
     void refreshLatestStatus();
   }, LIVE_STATUS_REFRESH_INTERVAL_MS);
   nodeInfoTimer = window.setInterval(() => {
-    // syncNodeInfo 只有 finally;吞掉偶发的 /api/nodes 失败,避免失败的 30s tick 抛出
-    // unhandled rejection(下一 tick 会重试)。
     void syncNodeInfo().catch(() => {});
   }, NODE_INFO_REFRESH_INTERVAL_MS);
 }
 
-export function stopStore() {
+export function retainStore() {
+  if (stopTimer != null) {
+    window.clearTimeout(stopTimer);
+    stopTimer = null;
+  }
+  retainCount += 1;
+  ensureStarted();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    retainCount = Math.max(0, retainCount - 1);
+    if (retainCount === 0 && stopTimer == null) {
+      stopTimer = window.setTimeout(() => {
+        stopTimer = null;
+        if (retainCount === 0) stopStore();
+      }, 0);
+    }
+  };
+}
+
+function stopStore() {
+  if (stopTimer != null) {
+    window.clearTimeout(stopTimer);
+    stopTimer = null;
+  }
+  liveStatusController?.abort();
+  liveStatusController = null;
+  nodeInfoController?.abort();
+  nodeInfoController = null;
   if (liveStatusTimer != null) {
     window.clearInterval(liveStatusTimer);
     liveStatusTimer = null;
@@ -878,6 +885,9 @@ export function stopStore() {
     scrollTrackingStarted = false;
   }
   scrollActive = false;
+  refreshDeferredWhileScrolling = false;
+  hydrated = false;
+  nodeInfoError = false;
   started = false;
 }
 
@@ -937,10 +947,18 @@ function subscribeByKey(
 }
 
 export function getStoreStatusSnapshot(): StoreStatusSnapshot {
-  if (storeStatusSnapshot.failureStreak === state.failureStreak) {
+  if (
+    storeStatusSnapshot.failureStreak === state.failureStreak &&
+    storeStatusSnapshot.hydrated === hydrated &&
+    storeStatusSnapshot.nodeInfoError === nodeInfoError
+  ) {
     return storeStatusSnapshot;
   }
-  storeStatusSnapshot = { failureStreak: state.failureStreak };
+  storeStatusSnapshot = {
+    failureStreak: state.failureStreak,
+    hydrated,
+    nodeInfoError,
+  };
   return storeStatusSnapshot;
 }
 

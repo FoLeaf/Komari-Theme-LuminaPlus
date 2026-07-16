@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -9,12 +9,10 @@ import {
   Clock3,
   Cpu,
   Database,
-  Download,
   Gauge,
   HardDrive,
   MemoryStick,
   Network,
-  Upload,
   Unplug,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -218,20 +216,10 @@ function HealthBars({
       ? "50%"
       : `clamp(42px, ${((activeIndex + 0.5) / bars.length) * 100}%, calc(100% - 42px))`;
 
-  useEffect(() => {
-    if (selectedIndex == null) return;
-
-    const clearWhenOutside = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && containerRef.current?.contains(target)) {
-        return;
-      }
-      setSelectedIndex(null);
-    };
-
-    document.addEventListener("pointerdown", clearWhenOutside);
-    return () => document.removeEventListener("pointerdown", clearWhenOutside);
-  }, [selectedIndex]);
+  const selectIndex = (next: number) => {
+    if (bars.length === 0) return;
+    setSelectedIndex(Math.max(0, Math.min(bars.length - 1, next)));
+  };
 
   return (
     <div
@@ -239,6 +227,25 @@ function HealthBars({
       className="compact-node-health-bars"
       data-kind={kind}
       style={{ "--compact-health-tooltip-x": activeLeft } as CSSProperties}
+      tabIndex={0}
+      role="group"
+      aria-label={`${kind === "latency" ? "延迟" : "丢包"}历史${activeTooltip ? `，${activeTooltip}` : ""}，使用左右方向键查看`}
+      onFocus={() => {
+        if (selectedIndex == null) selectIndex(bars.length - 1);
+      }}
+      onBlur={() => {
+        setHoveredIndex(null);
+        setSelectedIndex(null);
+      }}
+      onKeyDown={(event) => {
+        const current = selectedIndex ?? bars.length - 1;
+        if (event.key === "ArrowLeft") selectIndex(current - 1);
+        else if (event.key === "ArrowRight") selectIndex(current + 1);
+        else if (event.key === "Home") selectIndex(0);
+        else if (event.key === "End") selectIndex(bars.length - 1);
+        else return;
+        event.preventDefault();
+      }}
     >
       {activeTooltip && (
         <span className="compact-node-health-tooltip" role="status">
@@ -249,8 +256,6 @@ function HealthBars({
         const hasSamples = bucket.total > 0;
         const latencyValue = bucket.value ?? 0;
         const lossValue = bucket.loss ?? 0;
-        // 延迟柱:value 非 null(含 0=亚毫秒成功)即视为有有效延迟;全丢包/无样本时 value 为 null
-        // 仍画空槽(由丢包柱体现)。丢包柱沿用 hasSamples。
         const active = kind === "latency" ? bucket.value != null : hasSamples;
         const height =
           kind === "latency"
@@ -269,22 +274,18 @@ function HealthBars({
         const tooltip = formatHealthBucketTooltip(bucket, kind);
 
         return (
-          <button
+          <span
             key={`${bucket.index}-${index}`}
-            type="button"
             className="compact-node-health-bar"
             style={style}
             data-selected={selectedIndex === index ? "true" : "false"}
-            aria-label={`${kind === "latency" ? "延迟" : "丢包"} ${tooltip}`}
+            aria-hidden="true"
             title={tooltip}
             onMouseEnter={() => setHoveredIndex(index)}
             onMouseLeave={() => setHoveredIndex(null)}
-            onFocus={() => setHoveredIndex(index)}
-            onBlur={() => setHoveredIndex(null)}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setSelectedIndex((current) => (current === index ? null : index));
+            onClick={() => {
+              containerRef.current?.focus({ preventScroll: true });
+              setSelectedIndex(index);
             }}
           />
         );
@@ -339,7 +340,7 @@ function CompactNodeHeader({
         <div className="compact-node-title-row">
           <Flag region={node.region} size={15} />
           <Link
-            to={`/instance/${node.uuid}`}
+            to={`/instance/${encodeURIComponent(node.uuid)}`}
             className="compact-node-title"
             title={node.name}
           >
@@ -349,7 +350,7 @@ function CompactNodeHeader({
       </div>
       <div className="compact-node-actions">
         <Link
-          to={`/instance/${node.uuid}`}
+          to={`/instance/${encodeURIComponent(node.uuid)}`}
           className="compact-node-detail-link"
           title={detailLabels.title}
           aria-label={detailLabels.ariaLabel}
@@ -498,14 +499,26 @@ function CompactNodeInfoStrip({
       {showTrafficTotal && (
         <CompactInfoTile
           label="累计流量"
-          color="var(--text-secondary)"
+          color="var(--text-primary)"
         >
           <CompactInfoRow
-            icon={<Upload size={12} strokeWidth={2.1} />}
+            icon={(
+              <ArrowUp
+                size={12}
+                strokeWidth={2.5}
+                aria-label="上行"
+              />
+            )}
             value={formatBytes(node.trafficUp)}
           />
           <CompactInfoRow
-            icon={<Download size={12} strokeWidth={2.1} />}
+            icon={(
+              <ArrowDown
+                size={12}
+                strokeWidth={2.5}
+                aria-label="下行"
+              />
+            )}
             value={formatBytes(node.trafficDown)}
           />
         </CompactInfoTile>

@@ -7,7 +7,6 @@ import {
   ChevronUp,
   CircleDollarSign,
   EyeOff,
-  Grid3x3,
   LayoutTemplate,
   LayoutGrid,
   List,
@@ -26,6 +25,7 @@ import { InstancePanel } from "@/components/instance/InstancePanel";
 import { Spinner } from "@/components/ui/Spinner";
 import { Flag } from "@/components/ui/Flag";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
+import { useHourlyClock } from "@/hooks/useClock";
 import { queryClient } from "@/services/queryClient";
 import {
   ApiRequestError,
@@ -83,10 +83,8 @@ const APPEARANCE_OPTIONS = [
 const NODE_VIEW_MODE_OPTIONS = [
   { value: "large", label: "大卡片", icon: LayoutGrid },
   { value: "compact", label: "小卡片", icon: Rows3 },
-  { value: "mini", label: "迷你卡片", icon: Grid3x3 },
   { value: "list", label: "列表", icon: List },
 ] as const;
-// 列表档仅桌面可用,移动端默认里不提供(见 useViewMode 的 MOBILE_VIEW_MODES)。
 const MOBILE_VIEW_MODE_OPTIONS = NODE_VIEW_MODE_OPTIONS.filter((option) => option.value !== "list");
 const BACKGROUND_SIZE_OPTIONS: Array<{ value: BackgroundSize; label: string }> = [
   { value: "cover", label: "填满" },
@@ -126,8 +124,6 @@ function sortTasks(tasks: PingTask[]) {
   });
 }
 
-// 键序固定为 { amount, paidCny?, acquiredAt? },与 normalizeCostPremiums 一致,
-// 否则 dirty/reseed 的 JSON.stringify 签名会误报。
 function buildPremiumEntry(
   amount: number,
   paidCny?: number,
@@ -144,6 +140,21 @@ function sortClients(clients: AdminClient[]) {
   return [...clients].sort((left, right) => {
     if (left.weight !== right.weight) return left.weight - right.weight;
     return left.name.localeCompare(right.name);
+  });
+}
+
+function filterClients(clients: AdminClient[], rawKeyword: string) {
+  const keyword = rawKeyword.trim().toLowerCase();
+  if (!keyword) return clients;
+  return clients.filter((client) => {
+    const group = String(client.group || "").toLowerCase();
+    const region = String(client.region || "").toLowerCase();
+    return (
+      client.name.toLowerCase().includes(keyword) ||
+      client.uuid.toLowerCase().includes(keyword) ||
+      group.includes(keyword) ||
+      region.includes(keyword)
+    );
   });
 }
 
@@ -330,7 +341,13 @@ function draftFromSettings(settings: ResolvedThemeSettings): ThemeDraft {
 }
 
 export function ThemeManage() {
-  const { data: config, isLoading: configLoading } = usePublicConfig();
+  const now = useHourlyClock();
+  const {
+    data: config,
+    isLoading: configLoading,
+    error: configError,
+    refetch: refetchConfig,
+  } = usePublicConfig();
   // 全部托管设置收敛为单个草稿对象。之前是 30 个平行 useState,每新增一项设置要同步维护
   // 声明/seedDrafts/payload/依赖数组四处清单;现在键清单只在 pickManagedThemeSettings 一处。
   const [draft, setDraft] = useState<ThemeDraft>(() =>
@@ -344,11 +361,14 @@ export function ThemeManage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [accessRevoked, setAccessRevoked] = useState(false);
+  const savingDraftRef = useRef<ThemeDraft | null>(null);
+  const editVersionRef = useRef(0);
 
   // 单字段更新收口,所有表单控件都走它。值未变时原样返回 prev,保留旧的独立 useState
   // 在同值 set 时不触发重渲染的行为。
   const patch = useCallback(
     <K extends keyof ThemeDraft>(key: K, value: ThemeDraft[K]) => {
+      editVersionRef.current += 1;
       setDraft((prev) => (Object.is(prev[key], value) ? prev : { ...prev, [key]: value }));
     },
     [],
@@ -356,6 +376,7 @@ export function ThemeManage() {
   // 绑定关系的三个入口(勾选/全选/清空)都是基于前值的函数式更新,单独收口。
   const patchBindings = useCallback(
     (updater: (prev: HomepagePingTaskBindings) => HomepagePingTaskBindings) => {
+      editVersionRef.current += 1;
       setDraft((prev) => ({
         ...prev,
         homepagePingBindings: updater(prev.homepagePingBindings),
@@ -370,7 +391,7 @@ export function ThemeManage() {
     error: tasksError,
   } = useQuery({
     queryKey: ["admin", "ping-tasks"],
-    queryFn: getAdminPingTasks,
+    queryFn: ({ signal }) => getAdminPingTasks({ signal }),
     staleTime: 30_000,
     retry: false,
   });
@@ -380,7 +401,7 @@ export function ThemeManage() {
     error: clientsError,
   } = useQuery({
     queryKey: ["admin", "clients"],
-    queryFn: getAdminClients,
+    queryFn: ({ signal }) => getAdminClients({ signal }),
     staleTime: 30_000,
     retry: false,
   });
@@ -389,10 +410,7 @@ export function ThemeManage() {
     () => normalizeThemeSettings(config?.theme_settings),
     [config?.theme_settings],
   );
-  // 服务端设置的内容签名。React Query 每次 ["public"] refetch(聚焦、过期、失效)都返回
-  // 新的 `config` 对象,即使字节完全一样,每个 `source*` 值也会是新身份。用这个签名作为
-  // reseed 的判断依据,并记录上次实际应用的值,这样内容相同的 refetch 不会冲掉未保存的草稿,
-  // 而服务端数据真的变了时仍会重新 seed。
+  // 按内容判断服务端设置是否真的变化，避免同内容 refetch 重置草稿。
   const sourceSignature = useMemo(
     () => JSON.stringify(pickManagedThemeSettings(sourceThemeSettings)),
     [sourceThemeSettings],
@@ -408,8 +426,10 @@ export function ThemeManage() {
     if (!config) return;
     if (lastSeededSignatureRef.current === sourceSignature) return;
     lastSeededSignatureRef.current = sourceSignature;
+    // 保存期间若用户又编辑了表单，保留新草稿，避免请求回流覆盖它。
+    if (savingDraftRef.current && draft !== savingDraftRef.current) return;
     seedDrafts(sourceThemeSettings);
-  }, [config, sourceSignature, sourceThemeSettings, seedDrafts]);
+  }, [config, draft, sourceSignature, sourceThemeSettings, seedDrafts]);
 
   const sortedTasks = useMemo(() => sortTasks(pingTasks ?? []), [pingTasks]);
   const sortedClients = useMemo(() => sortClients(adminClients ?? []), [adminClients]);
@@ -449,35 +469,14 @@ export function ThemeManage() {
     });
   }, [sortedTasks, taskSearch]);
 
-  const visibleClients = useMemo(() => {
-    const keyword = nodeSearch.trim().toLowerCase();
-    if (!keyword) return sortedClients;
-    return sortedClients.filter((client) => {
-      const group = String(client.group || "").toLowerCase();
-      const region = String(client.region || "").toLowerCase();
-      return (
-        client.name.toLowerCase().includes(keyword) ||
-        client.uuid.toLowerCase().includes(keyword) ||
-        group.includes(keyword) ||
-        region.includes(keyword)
-      );
-    });
-  }, [nodeSearch, sortedClients]);
-
-  const filteredPremiumClients = useMemo(() => {
-    const keyword = premiumSearch.trim().toLowerCase();
-    if (!keyword) return sortedClients;
-    return sortedClients.filter((client) => {
-      const group = String(client.group || "").toLowerCase();
-      const region = String(client.region || "").toLowerCase();
-      return (
-        client.name.toLowerCase().includes(keyword) ||
-        client.uuid.toLowerCase().includes(keyword) ||
-        group.includes(keyword) ||
-        region.includes(keyword)
-      );
-    });
-  }, [premiumSearch, sortedClients]);
+  const visibleClients = useMemo(
+    () => filterClients(sortedClients, nodeSearch),
+    [nodeSearch, sortedClients],
+  );
+  const filteredPremiumClients = useMemo(
+    () => filterClients(sortedClients, premiumSearch),
+    [premiumSearch, sortedClients],
+  );
 
   // 溢价表格里"当前剩余价值"仅供参考,用已保存的汇率源/忽略名单算(不用草稿里还没保存的
   // 编辑),口径与资产统计页完全一致(同一个 calculateCostSummary),但不叠加溢价本身。
@@ -485,13 +484,13 @@ export function ThemeManage() {
   // 状态轮询(wsStore),设置页只需要静态 meta,不该为一列参考值挂一个常驻轮询。
   const { data: allMeta = [] } = useQuery({
     queryKey: ["theme-manage", "node-meta"],
-    queryFn: getNodes,
+    queryFn: ({ signal }) => getNodes({ signal }),
     staleTime: 60_000,
     retry: 1,
   });
   const premiumRateQuery = useQuery({
     queryKey: ["cost-rates", sourceThemeSettings.costRateApiUrl],
-    queryFn: () => getExchangeRates(sourceThemeSettings.costRateApiUrl),
+    queryFn: ({ signal }) => getExchangeRates(sourceThemeSettings.costRateApiUrl, { signal }),
     staleTime: 60 * 60 * 1000,
     enabled: allMeta.length > 0,
     retry: 1,
@@ -503,10 +502,12 @@ export function ThemeManage() {
       allMeta,
       sourceThemeSettings.costIgnoredNodes,
       premiumRateQuery.data.rates,
+      undefined,
+      now,
     );
     for (const detail of summary.details) map.set(detail.uuid, detail);
     return map;
-  }, [allMeta, sourceThemeSettings.costIgnoredNodes, premiumRateQuery.data]);
+  }, [allMeta, now, sourceThemeSettings.costIgnoredNodes, premiumRateQuery.data]);
 
   // 首次录入使用当前剩余价值作为折算基准；后续编辑由 paidCny-amount 还原并沿用该基准。
   const currentPremiumBasis = useCallback(
@@ -528,6 +529,7 @@ export function ThemeManage() {
   // 收购价清空即删条目;溢价在此刻算出并固化,不随后续续费/汇率漂移。
   const patchPremiumPaid = useCallback(
     (uuid: string, rawValue: string) => {
+      editVersionRef.current += 1;
       setDraft((prev) => {
         const next = { ...prev.costPremiums };
         if (rawValue.trim() === "") {
@@ -556,6 +558,7 @@ export function ThemeManage() {
   // 收购日期只决定摊销跨度，不回溯改写已经固化的溢价基准。
   const patchPremiumAcquiredAt = useCallback(
     (uuid: string, rawValue: string) => {
+      editVersionRef.current += 1;
       setDraft((prev) => {
         const current = prev.costPremiums[uuid];
         if (!current) return prev;
@@ -634,7 +637,9 @@ export function ThemeManage() {
   );
 
   const handleSave = async () => {
-    if (!config?.theme) return;
+    if (!config?.theme || savingDraftRef.current) return;
+    const submittedEditVersion = editVersionRef.current;
+    savingDraftRef.current = draft;
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -649,7 +654,9 @@ export function ThemeManage() {
       };
       await saveThemeSettings(config.theme, nextSettings);
       await queryClient.invalidateQueries({ queryKey: ["public"] });
-      setMessage("主题设置已保存");
+      if (editVersionRef.current === submittedEditVersion) {
+        setMessage("主题设置已保存");
+      }
     } catch (saveError) {
       if (
         saveError instanceof ApiRequestError &&
@@ -660,6 +667,7 @@ export function ThemeManage() {
       }
       setError(saveError instanceof Error ? saveError.message : "保存失败");
     } finally {
+      savingDraftRef.current = null;
       setSaving(false);
     }
   };
@@ -674,6 +682,33 @@ export function ThemeManage() {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <Spinner size={24} />
+      </div>
+    );
+  }
+
+  if (!config) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
+        <div role="alert" className="space-y-2">
+          <div className="text-[15px] font-semibold text-[var(--text-primary)]">
+            无法读取主题配置
+          </div>
+          <p className="max-w-[32rem] text-[13px] text-[var(--text-secondary)]">
+            {configError instanceof Error ? configError.message : "请稍后重试。"}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refetchConfig()}
+            className="control-button px-4 py-2 text-[13px] font-medium"
+          >
+            重试
+          </button>
+          <Link to="/" className="control-button px-4 py-2 text-[13px] font-medium">
+            返回首页
+          </Link>
+        </div>
       </div>
     );
   }
@@ -698,6 +733,7 @@ export function ThemeManage() {
   const noTasksYet = !tasksLoading && !clientsLoading && sortedTasks.length === 0;
   const noFilteredTaskMatch = !tasksLoading && !clientsLoading && !noTasksYet && filteredTasks.length === 0;
   const setRatingLabelDraft = (kind: OverviewRatingKind, value: string) => {
+    editVersionRef.current += 1;
     setDraft((prev) => ({
       ...prev,
       ratingLabels: { ...prev.ratingLabels, [kind]: value },

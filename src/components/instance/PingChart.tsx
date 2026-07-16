@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import UplotReact from "uplot-react";
 import type uPlot from "uplot";
 import { Eye, EyeOff, RefreshCw } from "lucide-react";
-import { usePingRecords } from "@/hooks/useRecords";
+import { usePingRecords, usePingStats } from "@/hooks/useRecords";
 import { InstancePanel, InstanceChartLoading } from "./InstancePanel";
 import {
   buildChartTooltipHooks,
@@ -23,29 +23,72 @@ import {
 } from "./chartData";
 import { latencyHeatColor, lossHeatColor } from "@/utils/metricTone";
 import { historyChartRangeSeconds, historyCoverageLabel } from "@/utils/historyRange";
-import { resolvePingChartInterval } from "@/utils/pingMetrics";
+import { resolvePingChartInterval, resolvePingSampleCounts } from "@/utils/pingMetrics";
 import { usePreferences } from "@/hooks/usePreferences";
 import type { PingRecord } from "@/types/komari";
 import type { TimedMetricPoint } from "./chartData";
 
-// 调用方传入已升序排好的数组，min/max/p50/p99 共用一次排序，不必重排（也避免
-// `Math.min(...values)`——展开大数组会抛 RangeError）。
-function percentileFromSorted(sorted: number[], ratio: number) {
-  if (sorted.length === 0) return null;
-  const index = (sorted.length - 1) * ratio;
-  const lower = Math.floor(index);
-  const upper = Math.ceil(index);
-  if (lower === upper) return sorted[lower];
-  const weight = index - lower;
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * weight;
+interface WeightedLatency {
+  value: number;
+  weight: number;
 }
 
-// 渲染前先按时间分桶降采样到这么多点（避免 uPlot 抽稀尖刺）。
+function valueAtWeightedIndex(sorted: WeightedLatency[], index: number) {
+  let offset = 0;
+  for (const sample of sorted) {
+    offset += sample.weight;
+    if (index < offset) return sample.value;
+  }
+  return sorted[sorted.length - 1]?.value ?? null;
+}
+
+function percentileFromWeighted(sorted: WeightedLatency[], ratio: number) {
+  const total = sorted.reduce((sum, sample) => sum + sample.weight, 0);
+  if (total <= 0) return null;
+  const index = (total - 1) * ratio;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const lowerValue = valueAtWeightedIndex(sorted, lower);
+  const upperValue = valueAtWeightedIndex(sorted, upper);
+  if (lowerValue == null || upperValue == null) return null;
+  if (lower === upper) return lowerValue;
+  const weight = index - lower;
+  return lowerValue + (upperValue - lowerValue) * weight;
+}
+
+export function summarizePingRecords(records: PingRecord[]) {
+  const samples = records.map((record) => ({
+    record,
+    ...resolvePingSampleCounts(record),
+  }));
+  const valid = samples
+    .filter(({ record, valid: count }) => record.value >= 0 && count > 0)
+    .map(({ record, valid: count }) => ({ value: record.value, weight: count }))
+    .sort((a, b) => a.value - b.value);
+  const total = samples.reduce((sum, sample) => sum + sample.total, 0);
+  const lost = samples.reduce((sum, sample) => sum + sample.lost, 0);
+  const validCount = valid.reduce((sum, sample) => sum + sample.weight, 0);
+
+  return {
+    latest:
+      [...samples].reverse().find(({ record, valid: count }) => record.value >= 0 && count > 0)
+        ?.record.value ?? null,
+    avg:
+      validCount > 0
+        ? valid.reduce((sum, sample) => sum + sample.value * sample.weight, 0) / validCount
+        : null,
+    min: valid[0]?.value ?? null,
+    max: valid[valid.length - 1]?.value ?? null,
+    p50: percentileFromWeighted(valid, 0.5),
+    p99: percentileFromWeighted(valid, 0.99),
+    total,
+    lost,
+    loss: total > 0 ? (lost / total) * 100 : 0,
+  };
+}
+
 const MAX_RENDER_POINTS = 160;
-// “削峰平滑”关闭：窗口=1 即不再叠加滑动平均（之前默认 7 会把长时段磨成近似直线），
-// 改由保峰降采样让真实尖峰穿透显示——“关闭”此时真的等于“不额外平滑”。
 const SMOOTH_WINDOW_POINTS = 1;
-// “削峰平滑”开启：均值降采样 + EWMA 削峰 + 更强滑动平均，得到平滑曲线。点窗调大 → 更平滑。
 const SMOOTH_WINDOW_POINTS_PEAK = 13;
 
 export function PingChart({
@@ -57,7 +100,18 @@ export function PingChart({
   hours: number;
   active?: boolean;
 }) {
-  const { data, isLoading, refetch } = usePingRecords(uuid, hours, active);
+  const {
+    data,
+    isError,
+    isFetching,
+    isLoading,
+    refetch: refetchRecords,
+  } = usePingRecords(uuid, hours, active);
+  const { data: pingStats = [], refetch: refetchStats } = usePingStats(
+    uuid,
+    hours,
+    active && Boolean(data?.records.length),
+  );
   const { resolvedAppearance } = usePreferences();
   const { w, h, ref: chartSizeRef } = useResponsiveChartSize("wide");
   const [hiddenTasks, setHiddenTasks] = useState<Set<number>>(new Set());
@@ -72,9 +126,7 @@ export function PingChart({
     time: "",
   });
   const isDark = resolvedAppearance === "dark";
-  // 后端 (GetAllPingTasks) 已按 `weight ASC, id ASC` 排好序返回，但响应里不携带 weight 数值，
-  // 所以这里不能再自行按 weight/id 重排——直接保留后端顺序，才能与后台"延迟检测设置"里的
-  // 拖动排序一致。（旧代码强制按 id 升序，拖动过顺序的用户就会看到卡片/线条顺序与后台不符。）
+  // API 顺序与后台任务权重一致，响应本身不一定包含可重排的权重。
   const tasks = useMemo(() => [...(data?.tasks ?? [])], [data]);
   const taskLabels = useMemo(() => {
     const counts = new Map<string, number>();
@@ -122,8 +174,6 @@ export function PingChart({
   }, [tasks]);
 
   const chart = useMemo(() => {
-    // 为每个 task 构建完整的对齐序列。显隐通过每条 series 的 `show` 标志 (以及渲染门控)
-    // 实现，所以切换某条线不会重跑这套分桶流程。
     if (!data?.records.length || !tasks.length) return null;
     const pointMap = new Map<number, TimedMetricPoint>();
     const sortedRecords = data.records
@@ -147,16 +197,14 @@ export function PingChart({
     );
     const tolerance = Math.min(6, Math.max(0.8, fallbackInterval * 0.25));
 
-    // records 已按时间排序，且 anchor 之间间距总是大于 `tolerance` (只有当现有 anchor 都不
-    // 在容差内才会新建)，所以一条 record 至多匹配一个 anchor，且必为最近的那个。这样就是 O(n)
-    // 合并，而非原来的 O(records × anchors)。
+    // 升序游标把邻近任务采样合并到同一时间锚点，保持 O(n)。
     let lastAnchor = Number.NEGATIVE_INFINITY;
     for (const { record, time } of sortedRecords) {
       if (!taskKeySet.has(String(record.task_id))) continue;
       const anchor = time - lastAnchor <= tolerance ? lastAnchor : time;
       if (anchor === time) lastAnchor = time;
       const current = pointMap.get(anchor) ?? { time: anchor };
-      // value>=0 都是成功（0 表示往返 <1ms，被后端取整成 0）；只有 value<0（即 -1）才是真丢包→断点。
+      // 0 是亚毫秒成功，负值才表示丢包。
       current[String(record.task_id)] = record.value >= 0 ? record.value : null;
       pointMap.set(anchor, current);
     }
@@ -176,15 +224,12 @@ export function PingChart({
       matchToleranceRatio: 0.25,
     });
     const times = chartPoints.map((point) => point.time);
-    // 让 undefined (off-phase anchor) 和 null (真实丢包/断点) 保持区分：uPlot 会跨过前者、
-    // 在后者断开。这里若合并成 null，正是当初把多 task 线条切碎成空的原因。
+    // undefined 表示错相采样，null 表示真实断点。
     const perTask = taskKeys.map((taskKey) =>
       chartPoints.map((point) => point[taskKey]),
     );
 
-    // 关闭削峰：保峰降采样（真实尖峰穿透）；开启削峰：均值降采样（配合后面的强平滑磨平尖峰）。
     const reduced = downsampleAligned(times, perTask, MAX_RENDER_POINTS, !cutPeak);
-    // 关闭削峰时窗口=1（不额外平滑，如实显示）；开启削峰时点窗加大（并已在前面叠加 cutPeakValues 削峰）。
     const smoothed = smoothByCount(
       reduced.perTask,
       cutPeak ? SMOOTH_WINDOW_POINTS_PEAK : SMOOTH_WINDOW_POINTS,
@@ -219,8 +264,6 @@ export function PingChart({
 
   const yRange = useMemo<[number | null, number | null]>(() => {
     if (!chart) return [null, null];
-    // 单次遍历求 min/max——避免分配扁平化的值数组，也避免 `Math.min(...values)` 展开
-    // (大数组会抛 RangeError)。
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
     for (let index = 0; index < tasks.length; index += 1) {
@@ -243,9 +286,6 @@ export function PingChart({
     return [Math.max(0, min - pad), max + pad];
   }, [chart, tasks, visibleTaskIds]);
 
-  // 除 width/height 外的全部配置。uplot-react 会剥掉 width/height，当两次渲染只有它们不同时
-  // 调 u.setSize() 而非重建 chart。让其余配置在 resize 间保持引用稳定，拖拽改尺寸就只是廉价的
-  // setSize 调用而非整体拆建。(显隐/范围变化仍会重建——那种情况少且是点击触发。)
   const baseOptions = useMemo<Omit<uPlot.Options, "width" | "height"> | null>(() => {
     if (!chart) return null;
     const { grid, text } = getAxisColors(isDark);
@@ -265,7 +305,6 @@ export function PingChart({
               color: taskColors.get(task.id) ?? colorForSeries(taskIndex, tasks.length),
             };
           })
-          // 按当前点的延迟从高到低排序，与图上线条自上而下的视觉顺序一致；无数据(—)沉底。
           .sort((a, b) => {
             if (a.raw == null) return b.raw == null ? 0 : 1;
             if (b.raw == null) return -1;
@@ -315,7 +354,14 @@ export function PingChart({
         })),
       ],
       hooks: {
-        init: [tooltipHooks.onInit],
+        init: [
+          (u) => {
+            u.root.setAttribute("role", "img");
+            u.root.setAttribute("aria-label", `Ping 延迟历史图表，共 ${tasks.length} 条线路`);
+          },
+          tooltipHooks.onInit,
+        ],
+        destroy: [tooltipHooks.onDestroy],
         setCursor: [tooltipHooks.onSetCursor],
       },
     };
@@ -339,7 +385,7 @@ export function PingChart({
     }
 
     const serverStats = new Map(
-      (data?.stats ?? [])
+      pingStats
         .filter((stat) => !stat.client || stat.client === uuid)
         .map((stat) => [stat.taskId, stat] as const),
     );
@@ -347,30 +393,26 @@ export function PingChart({
     return tasks.map((task, index) => {
       const records = grouped.get(task.id) ?? [];
       const server = serverStats.get(task.id);
-      // 有效样本含 0（0 = 往返 <1ms 被取整）；只有 value<0（-1）才是丢包，统计里排除。
-      const valid = records
-        .filter((record) => record.value >= 0)
-        .map((record) => record.value)
-        .sort((a, b) => a - b);
-      const latest = server
-        ? server.latest
-        : [...records].reverse().find((record) => record.value >= 0)?.value ?? null;
-      const avg = server
-        ? server.avg
-        : valid.length
-          ? valid.reduce((sum, value) => sum + value, 0) / valid.length
+      const fallback = summarizePingRecords(records);
+      const latest = server ? server.latest : fallback.latest;
+      const avg = server ? server.avg : fallback.avg;
+      const min = server ? server.min : fallback.min;
+      const max = server ? server.max : fallback.max;
+      const p50 = server ? server.p50 : fallback.p50;
+      const p99 = server ? server.p99 : fallback.p99;
+      const fallbackVolatility =
+        p50 != null && p99 != null
+          ? Math.max(0, p99 - p50) / Math.min(50, Math.max(10, p50))
           : null;
-      const min = server ? server.min : valid.length ? valid[0] : null;
-      const max = server ? server.max : valid.length ? valid[valid.length - 1] : null;
-      const p50 = server ? server.p50 : percentileFromSorted(valid, 0.5);
-      const p99 = server ? server.p99 : percentileFromSorted(valid, 0.99);
-      // p50 现在可能为 0（亚毫秒任务），`p50 &&` 守卫仍需保留：避免 p99/0 得到 Infinity。
-      const volatility = p50 && p99 ? p99 / p50 : null;
-      const total = server?.total ?? records.length;
+      const volatility =
+        server && Number.isFinite(server.p99P50Ratio)
+          ? server.p99P50Ratio
+          : fallbackVolatility;
+      const total = server?.total ?? fallback.total;
       const lost = server
         ? Math.max(0, server.total - server.valid)
-        : records.filter((record) => record.value < 0).length;
-      const loss = server?.loss ?? (total > 0 ? (lost / total) * 100 : task.loss);
+        : fallback.lost;
+      const loss = server?.loss ?? (total > 0 ? fallback.loss : task.loss);
       return {
         ...task,
         latest,
@@ -386,7 +428,12 @@ export function PingChart({
         color: taskColors.get(task.id) ?? colorForSeries(index, tasks.length),
       };
     });
-  }, [data, taskColors, tasks, uuid]);
+  }, [data, pingStats, taskColors, tasks, uuid]);
+
+  const refetchAll = () => {
+    void refetchRecords();
+    void refetchStats();
+  };
 
   const toggleTask = (taskId: number) => {
     setHiddenTasks((prev) => {
@@ -403,6 +450,25 @@ export function PingChart({
 
   if (isLoading) {
     return <InstanceChartLoading title="Ping 图表" />;
+  }
+
+  if (isError && !data?.records.length) {
+    return (
+      <InstancePanel title="Ping 图表">
+        <div className="instance-empty">
+          <span>延迟历史加载失败</span>
+          <button
+            type="button"
+            className="instance-toggle-button"
+            onClick={refetchAll}
+            disabled={isFetching}
+            aria-busy={isFetching}
+          >
+            {isFetching ? "重试中" : "重试"}
+          </button>
+        </div>
+      </InstancePanel>
+    );
   }
 
   if (!data?.records.length) {
@@ -429,12 +495,18 @@ export function PingChart({
           title="关闭：如实显示中断/丢包断点；开启：跨过所有空缺连成完整曲线（更好看，但看不出掉线）。注：偶尔漏一两次采样的小空缺始终自动桥接，不受此开关影响。"
         />
         <button type="button" className="instance-toggle-button" onClick={toggleAll}>
-          {hiddenTasks.size === 0 ? <EyeOff size={14} /> : <Eye size={14} />}
+          {hiddenTasks.size === 0 ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
           {hiddenTasks.size === 0 ? "隐藏全部" : "显示全部"}
         </button>
-        <button type="button" className="instance-toggle-button" onClick={() => void refetch()}>
-          <RefreshCw size={14} />
-          刷新
+        <button
+          type="button"
+          className="instance-toggle-button"
+          onClick={refetchAll}
+          disabled={isFetching}
+          aria-busy={isFetching}
+        >
+          <RefreshCw size={14} aria-hidden />
+          {isFetching ? "刷新中" : isError ? "刷新失败，重试" : "刷新"}
         </button>
       </div>
 
@@ -461,7 +533,12 @@ export function PingChart({
               <span className="instance-ping-task-name">{taskLabels.get(task.id) ?? `任务 #${task.id}`}</span>
               <span
                 className="instance-ping-task-primary"
-                style={{ color: task.latest != null ? latencyHeatColor(task.latest) : "var(--text-tertiary)" }}
+                style={{
+                  color:
+                    task.latest != null
+                      ? latencyHeatColor(task.latest)
+                      : "var(--text-tertiary)",
+                }}
               >
                 {task.latest != null ? `${task.latest.toFixed(1)} ms` : "—"}
               </span>
@@ -480,11 +557,6 @@ export function PingChart({
         {chart && options && visibleTasks.length > 0 ? (
           <>
             <UplotReact
-              // 把 cutPeak/connectNulls 纳入 key:这两个 toggle 改了数据与 y 轴 range,
-              // 复用同一 uPlot 实例(resetScales=false)时会卡成空白且关掉也不恢复;
-              // 改变 key 强制重建一个干净实例,开关都能正确重绘。key 不含 data —— 详情页无轮询
-              // (useRecords 无 refetchInterval),数据只在用户点"刷新"时变;彼时 tasks/yRange 换新
-              // 引用会让 options 整体重建(而非 setData),但刷新本就是一次性主动重绘,可接受。
               key={`${uuid}-${hours}-${cutPeak ? "smooth" : "raw"}-${connectNulls ? "span" : "gap"}`}
               options={options}
               data={chart}

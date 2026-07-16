@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useNodeMeta, useNodeMetrics } from "@/hooks/useNode";
 import { InstanceSwitcher } from "./InstanceSwitcher";
 import { formatBytes, formatUptimeDays } from "@/utils/format";
@@ -21,20 +21,12 @@ export function InstanceDetails({
 }) {
   const meta = useNodeMeta(uuid);
   const metrics = useNodeMetrics(uuid);
-  const hasAlignedOnReadyRef = useRef(false);
+  const isReady = Boolean(meta && metrics);
 
   useEffect(() => {
-    hasAlignedOnReadyRef.current = false;
-  }, [uuid]);
-
-  useEffect(() => {
-    if (!meta || !metrics || hasAlignedOnReadyRef.current) return;
-    hasAlignedOnReadyRef.current = true;
-    // 触发一次性对齐，但不接收它返回的 cleanup：调用方 (alignCharts) 返回的是给它自己
-    // effect 用的 rAF-cancel，这里若接收，后续 meta/metrics 变化会跑这个 cleanup，
-    // 在 scroll-into-view 触发前就把它取消掉。
-    onNodeReady?.();
-  }, [meta, metrics, onNodeReady]);
+    if (!isReady) return;
+    return onNodeReady?.();
+  }, [isReady, onNodeReady, uuid]);
 
   if (!meta || !metrics) return null;
 

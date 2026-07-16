@@ -1,8 +1,6 @@
-// Packages Komari-Theme-LuminaPlus-vX.Y.Z.zip ready for `komari-theme.json` + `preview.png` + `dist/` drop-in.
-// Uses Node's builtin zlib via a minimal zip stream (no external deps).
-
-import { createWriteStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
@@ -12,26 +10,37 @@ const manifest = JSON.parse(readFileSync(resolve(root, "komari-theme.json"), "ut
 const version = manifest.version ?? "0.0.0";
 const packageName = manifest.name ?? "Komari-Theme-LuminaPlus";
 const outPath = resolve(root, `${packageName}-v${version}.zip`);
+const ZIP_VERSION = 20;
+const UTF8_FLAG = 0x0800;
+const DEFLATE_METHOD = 8;
+const DOS_EPOCH_DATE = 0x0021;
+
+const CRC32_TABLE = new Uint32Array(256);
+for (let n = 0; n < CRC32_TABLE.length; n++) {
+  let value = n;
+  for (let bit = 0; bit < 8; bit++) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  CRC32_TABLE[n] = value >>> 0;
+}
 
 function crc32(buf) {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
   let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) crc = table[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  for (const byte of buf) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
   return (crc ^ 0xffffffff) >>> 0;
 }
 
 function walk(dir, base = dir) {
   const out = [];
-  for (const name of readdirSync(dir)) {
-    const full = join(dir, name);
-    const st = statSync(full);
-    if (st.isDirectory()) out.push(...walk(full, base));
-    else out.push({ path: relative(base, full), full, size: st.size });
+  const dirEntries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name.localeCompare(b.name, "en"),
+  );
+  for (const entry of dirEntries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full, base));
+    else if (entry.isFile()) out.push({ path: relative(base, full), full });
   }
   return out;
 }
@@ -39,9 +48,6 @@ function walk(dir, base = dir) {
 const distDir = resolve(root, "dist");
 const previewPath = resolve(root, "preview.png");
 
-// Fail with an actionable message instead of a raw ENOENT stack when this script
-// is run on its own (the normal `npm run package`/release flow builds + generates
-// the preview first, so these always exist there).
 for (const [path, hint] of [
   [previewPath, "run `node scripts/make-preview.mjs` (or `npm run package`) first"],
   [distDir, "run `npm run build` (or `npm run package`) first"],
@@ -70,11 +76,11 @@ for (const entry of entries) {
 
   const local = Buffer.alloc(30);
   local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4);            // version needed
-  local.writeUInt16LE(0x0800, 6);        // UTF-8 flag
-  local.writeUInt16LE(8, 8);             // deflate
-  local.writeUInt16LE(0, 10);            // time
-  local.writeUInt16LE(0, 12);            // date
+  local.writeUInt16LE(ZIP_VERSION, 4);
+  local.writeUInt16LE(UTF8_FLAG, 6);
+  local.writeUInt16LE(DEFLATE_METHOD, 8);
+  local.writeUInt16LE(0, 10);
+  local.writeUInt16LE(DOS_EPOCH_DATE, 12);
   local.writeUInt32LE(crc, 14);
   local.writeUInt32LE(deflated.length, 18);
   local.writeUInt32LE(data.length, 22);
@@ -97,12 +103,12 @@ const cdStart = offset;
 for (const e of cdEntries) {
   const cd = Buffer.alloc(46);
   cd.writeUInt32LE(0x02014b50, 0);
-  cd.writeUInt16LE(20, 4);
-  cd.writeUInt16LE(20, 6);
-  cd.writeUInt16LE(0x0800, 8);
-  cd.writeUInt16LE(8, 10);
+  cd.writeUInt16LE(ZIP_VERSION, 4);
+  cd.writeUInt16LE(ZIP_VERSION, 6);
+  cd.writeUInt16LE(UTF8_FLAG, 8);
+  cd.writeUInt16LE(DEFLATE_METHOD, 10);
   cd.writeUInt16LE(0, 12);
-  cd.writeUInt16LE(0, 14);
+  cd.writeUInt16LE(DOS_EPOCH_DATE, 14);
   cd.writeUInt32LE(e.crc, 16);
   cd.writeUInt32LE(e.compSize, 20);
   cd.writeUInt32LE(e.uncompSize, 24);
@@ -130,7 +136,6 @@ eocd.writeUInt32LE(cdSize, 12);
 eocd.writeUInt32LE(cdStart, 16);
 eocd.writeUInt16LE(0, 20);
 stream.write(eocd);
-
-stream.end(() => {
-  console.log(`Wrote ${outPath}`);
-});
+stream.end();
+await finished(stream);
+console.log(`Wrote ${outPath}`);

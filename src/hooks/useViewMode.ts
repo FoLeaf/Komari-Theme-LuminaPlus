@@ -7,10 +7,10 @@ import { isNodeViewMode, type NodeViewMode } from "@/utils/themeSettings";
 const DESKTOP_OVERRIDE_KEY = "komaritheme:node-view-mode-session:desktop";
 const MOBILE_OVERRIDE_KEY = "komaritheme:node-view-mode-session:mobile";
 const MOBILE_QUERY = "(max-width: 720px)";
-// 快捷切换按钮的循环顺序:大卡 → 小卡 → 迷你 → 列表 → 大卡……
-export const VIEW_MODE_CYCLE: NodeViewMode[] = ["large", "compact", "mini", "list"];
+// 快捷切换按钮的循环顺序：大卡 → 小卡 → 列表 → 大卡……
+const VIEW_MODE_CYCLE: NodeViewMode[] = ["large", "compact", "list"];
 // 列表档天生不适合窄屏,仅桌面可用:移动端从循环里剔除,且默认值解析成 list 时兜底回 compact。
-const MOBILE_VIEW_MODES: NodeViewMode[] = ["large", "compact", "mini"];
+const MOBILE_VIEW_MODES: NodeViewMode[] = ["large", "compact"];
 
 interface ViewModeState {
   device: "desktop" | "mobile";
@@ -28,7 +28,9 @@ let snapshot: ViewModeState = {
 function readOverride(key: string): NodeViewMode | null {
   try {
     const value = sessionStorage.getItem(key);
-    return isNodeViewMode(value) ? value : null;
+    if (value == null) return null;
+    // 已删除档位或其他旧值回退到小卡，并在下次切换时被正常覆盖。
+    return isNodeViewMode(value) ? value : "compact";
   } catch {
     return null;
   }

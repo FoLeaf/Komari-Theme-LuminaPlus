@@ -111,26 +111,32 @@
 
 .overview-card-action {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 42%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-elev-a) 72%, var(--surface-a));
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-secondary);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 16%, transparent);
+  box-shadow: none;
+  opacity: 0.82;
   transition:
-    background 160ms ease,
-    border-color 160ms ease,
     color 160ms ease,
+    opacity 160ms ease,
     transform 160ms ease;
 }
 
 .overview-card-action:hover {
-  border-color: color-mix(in srgb, var(--border-strong) 62%, transparent);
-  background: color-mix(in srgb, var(--hover-bg-a) 72%, var(--surface-elev-a));
+  background: transparent;
   color: var(--text-primary);
+  opacity: 1;
+}
+
+.overview-card-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text-secondary) 54%, transparent);
+  outline-offset: 2px;
 }
 
 .overview-card-action:active {
@@ -859,9 +865,7 @@
   }
 }
 
-/* 首页控件条:复用卡片网格列定义(见 NodeGrid 的 gridTemplateColumns)。分组标签自动落在
-   第一列(=一张卡宽,随响应式动态变化、左缘对齐首卡);排序控件钉最后一列右对齐。窄屏只剩
-   1 列时,排序与分组冲突列位 → 自动落到下一行、仍右对齐。 */
+/* 首页控件条复用卡片网格列定义：分组标签落在第一列，排序控件钉在最后一列。 */
 .home-controls-bar {
   align-items: center;
 }
@@ -937,9 +941,7 @@
   color: var(--accent-500);
 }
 
-/* 移动端:网格塌成 1 列时,排序控件会被挤到分组下一行。这里改用 flex 让两者并排同一行——
-   分组占满可用宽、溢出横向滚动,排序钮固定在右、不收缩。桌面端(>768px)维持上方的网格布局
-   (分组落第一列、对齐首卡),不受影响。 */
+/* 移动端让分组与排序并排；分组可横向滚动，排序保持在右侧。 */
 @media (max-width: 768px) {
   .home-controls-bar {
     display: flex;
@@ -959,36 +961,7 @@
   }
 }
 
-/* 迷你档网格:固定列数,桌面 5 张,按断点递减到 4/3/2/1。 */
-.node-grid-mini {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-@media (max-width: 1280px) {
-  .node-grid-mini {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 1024px) {
-  .node-grid-mini {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 720px) {
-  .node-grid-mini {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 480px) {
-  .node-grid-mini {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-/* 总览卡密集变体(迷你/列表档):压矮压密,和密集网格协调。只改尺寸/间距。 */
+/* 列表档总览卡密集变体：压矮压密，与表格式节点列表协调。 */
 .home-overview.is-dense {
   gap: 10px;
   margin-bottom: 14px;
@@ -1028,6 +1001,7 @@
 }
 
 .home-overview.is-dense .overview-card-action {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
 }

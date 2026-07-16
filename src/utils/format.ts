@@ -16,6 +16,7 @@ interface TrafficRateDisplay {
 }
 
 export function trimFixed(value: number, digits: number): string {
+  if (!Number.isFinite(value)) return "0";
   return value
     .toFixed(digits)
     .replace(/\.0+$/, "")
@@ -97,7 +98,7 @@ export function formatByteRateLabel(bytesPerSec: number | undefined | null): str
 }
 
 export function formatUptimeDays(seconds: number): { value: string; unit: string } {
-  if (!seconds || seconds <= 0) return { value: "—", unit: "" };
+  if (!Number.isFinite(seconds) || seconds <= 0) return { value: "—", unit: "" };
   const days = seconds / 86400;
   if (days >= 1) return { value: Math.floor(days).toString(), unit: "天" };
   const hours = seconds / 3600;
@@ -106,11 +107,7 @@ export function formatUptimeDays(seconds: number): { value: string; unit: string
   return { value: Math.floor(minutes).toString(), unit: "分钟" };
 }
 
-// 把节点的 `expired_at` 解析成绝对毫秒时间戳,没有真实到期时返回 null。Komari 按后端/agent 版本会用
-// 几种方式编码"无到期":JSON null(经我们的 zod 转换变成 "")、Go 零时 "0001-01-01T00:00:00Z"
-// (会被解析成公元 1 年,即 ≤0 的 epoch),或数字哨兵 0 / -1。这些都不是真实的过去日期——任由 Date.parse
-// 把它们变成 1/2000/2001 年,正是让永不过期的节点渲染成"已过期"并从成本汇总里掉出去的原因。裸正数则
-// 当作 unix 时间戳。
+// 将 `expired_at` 解析为毫秒；空值、Go 零时和 0/-1 哨兵均表示无到期。
 export function resolveExpireTimestamp(
   iso: string | number | null | undefined,
 ): number | null {
@@ -132,7 +129,7 @@ export function getExpireDaysRemaining(
   now = Date.now(),
 ): number | null {
   const ts = resolveExpireTimestamp(iso);
-  if (ts == null) return null;
+  if (ts == null || !Number.isFinite(now)) return null;
   return Math.floor((ts - now) / 86400000);
 }
 
@@ -144,8 +141,11 @@ function resolveExpireTone(days: number | null | undefined): ExpireTone {
   return "critical";
 }
 
-export function formatExpireDays(iso: string | null | undefined): { value: string; unit: string; tone: ExpireTone } {
-  const days = getExpireDaysRemaining(iso);
+export function formatExpireDays(
+  iso: string | null | undefined,
+  now = Date.now(),
+): { value: string; unit: string; tone: ExpireTone } {
+  const days = getExpireDaysRemaining(iso, now);
   const tone = resolveExpireTone(days);
   if (days == null) return { value: "—", unit: "", tone };
   if (tone === "long") return { value: "长期", unit: "", tone };

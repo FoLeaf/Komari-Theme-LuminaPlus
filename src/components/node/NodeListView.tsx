@@ -151,14 +151,29 @@ const NodeRow = memo(function NodeRow({ uuid }: { uuid: string }) {
   } = model;
   const detailLabels = nodeDetailLinkLabels(node.name, osName);
   const usedPct = `${Math.round(clamp01(traffic.fraction) * 100)}%`;
+  const rowLabel = [
+    node.name,
+    `系统 ${formatOsLabel(osName, node.os)}`,
+    `CPU ${pctText(node.cpuPct)}`,
+    `内存 ${pctText(node.ramPct)}`,
+    `磁盘 ${pctText(node.diskPct)}`,
+    `负载 ${node.load1.toFixed(2)}`,
+    `上行 ${upRate.value}${upRate.unit}`,
+    `下行 ${downRate.value}${downRate.unit}`,
+    `流量使用 ${usedPct}`,
+    `网络延迟 ${ping.lastValue == null ? "无样本" : `${Math.round(ping.lastValue)} 毫秒`}`,
+    node.online === true ? "在线" : node.online === false ? "离线" : "状态未知",
+    `运行 ${uptime.value}${uptime.unit}`,
+    `到期 ${expire.value}${expire.unit}`,
+    "查看详情",
+  ].join("，");
 
   return (
     <Link
-      to={`/instance/${uuid}`}
+      to={`/instance/${encodeURIComponent(uuid)}`}
       className={clsx("node-list-row", isOffline && "is-offline")}
-      data-appearance={resolvedAppearance}
       title={detailLabels.title}
-      aria-label={detailLabels.ariaLabel}
+      aria-label={rowLabel}
     >
       <div className="node-list-cell node-list-node">
         <div className="node-list-node-text">

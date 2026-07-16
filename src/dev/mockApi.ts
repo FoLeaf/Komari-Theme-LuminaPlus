@@ -2,6 +2,7 @@ import type { NodeInfo } from "@/types/komari";
 
 const GIB = 1024 ** 3;
 const TIB = 1024 ** 4;
+const MIB = 1024 ** 2;
 
 function dateAfter(days: number) {
   return new Date(Date.now() + days * 86_400_000).toISOString();
@@ -206,6 +207,7 @@ const statusProfiles = [
 ] as const;
 
 function latestStatus() {
+  const now = Date.now();
   return Object.fromEntries(
     nodes.map((node, index) => {
       const [cpu, load, swapPct, diskPct, ping, up, down, totalUp, totalDown, online] =
@@ -234,7 +236,7 @@ function latestStatus() {
           process: 96 + index * 21,
           connections: 180 + index * 44,
           connections_udp: 12 + index * 3,
-          updated_at: Date.now(),
+          updated_at: now,
           mock_ping: ping,
         },
       ];
@@ -246,6 +248,7 @@ function loadRecords(uuid: string) {
   const node = nodes.find((item) => item.uuid === uuid) ?? nodes[0];
   const index = nodes.indexOf(node);
   const profile = statusProfiles[Math.max(0, index)];
+  const now = Date.now();
   return Array.from({ length: 72 }, (_, sample) => {
     const phase = sample / 7 + index;
     const cpu = Math.max(2, Math.min(98, profile[0] + Math.sin(phase) * 10));
@@ -263,25 +266,72 @@ function loadRecords(uuid: string) {
       disk_total: node.disk_total,
       net_in: Math.max(0, profile[6] * (0.7 + Math.sin(phase) * 0.24)),
       net_out: Math.max(0, profile[5] * (0.7 + Math.cos(phase) * 0.24)),
-      net_total_up: profile[7],
-      net_total_down: profile[8],
+      net_total_up: Math.max(0, profile[7] - (71 - sample) * (12 + index * 3) * MIB),
+      net_total_down: Math.max(0, profile[8] - (71 - sample) * (28 + index * 5) * MIB),
       process: 100 + index * 20,
       connections: 180 + index * 40,
       connections_udp: 16,
-      time: Date.now() - (71 - sample) * 300_000,
+      time: now - (71 - sample) * 300_000,
       client: node.uuid,
     };
   });
 }
 
+function trafficMetricPayload(params: {
+  metric_keys?: string[];
+  entity_ids?: string[];
+  start?: string;
+  end?: string;
+}) {
+  const start = Number.isFinite(Date.parse(params.start ?? ""))
+    ? Date.parse(params.start ?? "")
+    : new Date().setHours(0, 0, 0, 0);
+  const end = Number.isFinite(Date.parse(params.end ?? ""))
+    ? Date.parse(params.end ?? "")
+    : Date.now();
+  const entityIds = params.entity_ids?.length ? params.entity_ids : nodes.map((node) => node.uuid);
+  const metricKeys = params.metric_keys ?? [];
+  const intervalMs = 5 * 60 * 1000;
+  const pointCount = Math.max(1, Math.ceil((end - start) / intervalMs));
+  const series = entityIds.flatMap((uuid) => {
+    const index = nodes.findIndex((node) => node.uuid === uuid);
+    if (index < 0 || index === nodes.length - 1) return [];
+    return metricKeys.map((metricKey) => ({
+      metric_key: metricKey,
+      entity_id: uuid,
+      interval_seconds: intervalMs / 1000,
+      points: Array.from({ length: pointCount }, (_, pointIndex) => {
+        const phase = pointIndex / 9 + index * 0.8;
+        const time = new Date(start + pointIndex * intervalMs).toISOString();
+        const value =
+          metricKey === "traffic.up"
+            ? (12 + index * 3) * MIB * (0.72 + Math.sin(phase) * 0.24)
+            : metricKey === "traffic.down"
+              ? (28 + index * 5) * MIB * (0.74 + Math.cos(phase) * 0.22)
+              : metricKey === "net.out.rate"
+                ? statusProfiles[index][5] * (0.62 + Math.sin(phase) * 0.34)
+                : statusProfiles[index][6] * (0.66 + Math.cos(phase) * 0.3);
+        return { time, value: Math.max(0, value), count: 1 };
+      }),
+    }));
+  });
+  return {
+    start: new Date(start).toISOString(),
+    end: new Date(end).toISOString(),
+    series,
+    count: series.length,
+  };
+}
+
 function pingRecords(uuid?: string) {
   const clients = uuid ? [uuid] : nodes.map((node) => node.uuid);
+  const now = Date.now();
   return clients.flatMap((client) => {
     const index = nodes.findIndex((node) => node.uuid === client);
     const baseline = statusProfiles[Math.max(0, index)][4];
     return Array.from({ length: 60 }, (_, sample) => ({
       task_id: 1,
-      time: Date.now() - (59 - sample) * 60_000,
+      time: now - (59 - sample) * 60_000,
       value:
         index === 2 && sample % 17 === 0
           ? -1
@@ -314,7 +364,7 @@ export function installDevMockApi() {
   const nativeFetch = window.fetch.bind(window);
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = input instanceof Request ? input : new Request(input, init);
+    const request = new Request(input, init);
     const url = new URL(request.url, window.location.origin);
 
     if (url.hostname === "api.frankfurter.dev") {
@@ -350,7 +400,7 @@ export function installDevMockApi() {
         custom_body: "",
         theme_settings: {
           desktopNodeViewMode: "compact",
-          mobileNodeViewMode: "mini",
+          mobileNodeViewMode: "compact",
           showHomeOverview: true,
           showGroupTabs: true,
           showRegionBar: true,
@@ -376,13 +426,28 @@ export function installDevMockApi() {
       const payload = (await request.json()) as {
         id?: number | string;
         method?: string;
-        params?: { uuid?: string; type?: string };
+        params?: {
+          uuid?: string;
+          type?: string;
+          metric_keys?: string[];
+          entity_ids?: string[];
+          start?: string;
+          end?: string;
+        };
       };
       let result: unknown = {};
-      if (
-        payload.method === "public:queryMetrics" ||
-        payload.method === "public:getPingMetricStats"
-      ) {
+      if (payload.method === "public:queryMetrics") {
+        const metricKeys = payload.params?.metric_keys ?? [];
+        if (metricKeys.some((key) => key === "traffic.up" || key === "traffic.down")) {
+          result = trafficMetricPayload(payload.params ?? {});
+        } else {
+          return json({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: { code: -32601, message: `Method not found: ${payload.method}` },
+          });
+        }
+      } else if (payload.method === "public:getPingMetricStats") {
         // mock 数据仍由兼容 records 接口提供；明确返回 Method not found 才会触发
         // api.ts 的旧接口回退，不能用空对象伪装成功（那会得到空图表）。
         return json({

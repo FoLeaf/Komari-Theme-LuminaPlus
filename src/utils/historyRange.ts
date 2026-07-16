@@ -1,4 +1,4 @@
-export interface HistoryRangeMeta {
+interface HistoryRangeMeta {
   rangeStartMs?: number;
   rangeEndMs?: number;
   intervalSeconds?: number;
@@ -69,6 +69,7 @@ export function historyCoverageLabel(
   if (!range || !finitePositive(actualStartSeconds) || !finitePositive(actualEndSeconds)) {
     return null;
   }
+  if ((actualEndSeconds ?? 0) < (actualStartSeconds ?? 0)) return null;
 
   const requestedMs = (range[1] - range[0]) * 1000;
   const intervalMs = Math.max(0, meta?.intervalSeconds ?? 0) * 1000;

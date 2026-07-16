@@ -1,16 +1,9 @@
-// 对齐 Komari 后端的 computeUsedByType(utils/notifier/traffic.go):配置的流量上限阈值会拿
-// 节点累计上/下行总量的这几种归约之一来比较。后端会把 type 转小写,空/未知值落到 "max"
-// (gorm 默认 'max')。
+// 与后端 computeUsedByType 保持一致，空或未知类型按 max 处理。
 export interface TrafficDisplay {
-  /** used / limit,夹到 0..1(无限时为 0)。 */
   fraction: number;
-  /** 条的热力色(用量上升时绿 → 红)。 */
   color: string;
-  /** "12.4 GB" 或 "∞" —— 大卡片上紧挨标签内联显示。 */
   remainingLabel: string;
-  /** "64.3 GB / 4.00 TB" 或 "2.73 GB / ∞" —— used/limit 那一行。 */
   detail: string;
-  /** 上限类型的可读标签,如 "上下取大" —— 给 tooltip 用。 */
   typeLabel: string;
 }
 
@@ -43,20 +36,15 @@ export function computeTrafficUsed(
   }
 }
 
-export interface TrafficUsage {
-  /** 按 traffic_limit_type 归约后的累计"已用"量。 */
+interface TrafficUsage {
   used: number;
   limit: number;
-  /** 没配置正的上限(limit ≤ 0)时为 true。 */
   unlimited: boolean;
-  /** max(0, limit − used);无限时为 0。 */
   remaining: number;
-  /** used / limit 夹到 0..1;无限时为 0。 */
   fraction: number;
 }
 
-// 共享的流量模型——首页卡片(useNodeCardModel)和实例详情页共用的 used/remaining/fraction 唯一来源,
-// 让 traffic_limit_type 的语义到处保持一致。
+// 首页卡片与实例详情共用同一归约口径。
 export function resolveTrafficUsage(
   type: string | null | undefined,
   up: number,

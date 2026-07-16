@@ -63,9 +63,7 @@ function readStorageItem(key: string): string | null {
 function writeStorageItem(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
-  } catch {
-    // 持久化存储不可用时，保留内存里的 preference。
-  }
+  } catch {}
 }
 
 function readStoredAppearance() {
@@ -122,6 +120,12 @@ function commit(next: Partial<PrefsState>) {
   if (next.appearance) {
     merged.resolvedAppearance = resolveAppearance(merged.appearance);
   }
+  if (
+    snapshot.appearance === merged.appearance &&
+    snapshot.resolvedAppearance === merged.resolvedAppearance
+  ) {
+    return;
+  }
   if (snapshot.resolvedAppearance !== merged.resolvedAppearance) {
     markThemeFlip();
   }
@@ -130,8 +134,6 @@ function commit(next: Partial<PrefsState>) {
   emit();
 }
 
-// "system" 模式下，根据 OS 偏好重新解析。用具名函数（而非内联闭包），
-// 这样下面的 listener 才能被移除。
 function refreshSystemAppearance() {
   if (snapshot.appearance === "system") {
     commit({ appearance: "system" });
@@ -165,11 +167,6 @@ function clearSystemListeners() {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
 }
 
-// 在模块加载时（React 渲染之前）初始化，让持久化的 appearance 在首帧之前就落到
-// <html> 上（避免闪烁），且这些都不在 render 阶段运行。系统偏好的 listener 由第一个
-// 订阅者懒加载（最后一个订阅者注销时拆除），不会泄漏到整个页面生命周期。服务端默认值
-//（在没有显式偏好时）由 usePreferences 的 effect 单独应用，它从共享的 React Query
-// ["public"] 缓存里读取，而不是在这里重复发一次请求。
 function initializeAppearance() {
   const stored = readStoredAppearance();
   hasExplicitAppearancePreference = stored.hasExplicitPreference;
