@@ -5,8 +5,8 @@ import { RouteErrorFallback } from "@/components/shell/ErrorBoundary";
 import { Spinner } from "@/components/ui/Spinner";
 import { loadAssetsPage } from "@/services/assetsPageLoader";
 import { Traffic } from "@/pages/Traffic";
+import { Home } from "@/pages/Home";
 
-const Home = lazy(() => import("@/pages/Home").then((m) => ({ default: m.Home })));
 const Instance = lazy(() =>
   import("@/pages/Instance").then((m) => ({ default: m.Instance })),
 );
@@ -37,7 +37,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: suspended(<Home />),
+        element: <Home />,
       },
       {
         path: "instance/:uuid",

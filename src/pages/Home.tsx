@@ -4,13 +4,30 @@ import { NodeGrid } from "@/components/node/NodeGrid";
 import { FloatingControls } from "@/components/shell/FloatingControls";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/hooks/useAuth";
+import { useNodeStoreStatus } from "@/hooks/useNode";
+import { useThemeSettings } from "@/hooks/useThemeSettings";
 
 const ThemeManage = lazy(() =>
   import("@/pages/ThemeManage").then((module) => ({ default: module.ThemeManage })),
 );
 
-export function Home() {
+function HomeDashboard() {
   const [controlsExpanded, setControlsExpanded] = useState(false);
+  const themeSettings = useThemeSettings();
+  const { hydrated: storeHydrated } = useNodeStoreStatus();
+  const homeReady = themeSettings.isReady && storeHydrated;
+
+  return (
+    <div
+      className={`home-dashboard relative pb-2${controlsExpanded ? " is-controls-expanded" : ""}`}
+    >
+      {homeReady && <FloatingControls onExpandedChange={setControlsExpanded} />}
+      <NodeGrid />
+    </div>
+  );
+}
+
+export function Home() {
   const [searchParams] = useSearchParams();
   const {
     data: me,
@@ -76,12 +93,5 @@ export function Home() {
     return <Navigate to="/" replace />;
   }
 
-  return (
-    <div
-      className={`home-dashboard relative pb-2${controlsExpanded ? " is-controls-expanded" : ""}`}
-    >
-      <FloatingControls onExpandedChange={setControlsExpanded} />
-      <NodeGrid />
-    </div>
-  );
+  return <HomeDashboard />;
 }

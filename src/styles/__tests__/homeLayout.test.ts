@@ -16,6 +16,11 @@ const nodeGridSource = readFileSync(
   new URL("../../components/node/NodeGrid.tsx", import.meta.url),
   "utf8",
 );
+const appShellSource = readFileSync(
+  new URL("../../components/shell/AppShell.tsx", import.meta.url),
+  "utf8",
+);
+const routerSource = readFileSync(new URL("../../router.tsx", import.meta.url), "utf8");
 
 describe("home responsive layout contracts", () => {
   it("uses an explicit expanded state through tablet widths without :has()", () => {
@@ -59,5 +64,22 @@ describe("home responsive layout contracts", () => {
     expect(nodeGridSource.indexOf("!themeSettings.isReady || !storeHydrated")).toBeLessThan(
       nodeGridSource.indexOf("const homeHeader"),
     );
+    const loadingBranch = nodeGridSource.slice(
+      nodeGridSource.indexOf("!themeSettings.isReady || !storeHydrated"),
+      nodeGridSource.indexOf("const homeHeader"),
+    );
+    expect(loadingBranch).not.toContain("<HomeBrand");
+    expect(loadingBranch).not.toContain("<Spinner");
+    expect(homeSource).toContain("const homeReady = themeSettings.isReady && storeHydrated");
+    expect(homeSource).toContain("{homeReady && <FloatingControls");
+  });
+
+  it("keeps access and initial home hydration behind one shell-owned spinner", () => {
+    expect(appShellSource).toContain("useNodeStoreStatus(canHydrateHome)");
+    expect(appShellSource).toContain("isCheckingAccess || isCheckingHomeData");
+    expect(appShellSource).toContain("isCheckingShell ?");
+    expect(routerSource).toContain('import { Home } from "@/pages/Home"');
+    expect(routerSource).not.toMatch(/const Home\s*=\s*lazy/);
+    expect(routerSource).toContain("element: <Home />");
   });
 });

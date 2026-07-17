@@ -378,6 +378,8 @@ export interface PingOverviewItem {
   client: string;
   isAssigned: boolean;
   lastValue: number | null;
+  /** metric API 聚合桶的真实宽度；旧 records 接口没有该字段。 */
+  metricIntervalMs?: number;
   samples: Array<{
     time: number;
     value: number;

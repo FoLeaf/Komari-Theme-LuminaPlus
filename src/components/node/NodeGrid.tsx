@@ -37,7 +37,6 @@ import {
   getOverviewRating,
   type OverviewRating,
 } from "@/utils/overviewRating";
-import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
 import { MiniNodeCard } from "./MiniNodeCard";
 import { NodeCard } from "./NodeCard";
@@ -622,23 +621,15 @@ export function NodeGrid() {
     : gridStyle;
 
   if (!themeSettings.isReady || !storeHydrated) {
+    if (!nodeInfoError) return null;
     return (
-      <>
-        <HomeBrand siteName={siteName} />
-        <div
-          className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]"
-          aria-live="polite"
-        >
-          {nodeInfoError ? (
-            <>
-              <span className="text-[14px]">节点数据暂时无法加载</span>
-              <span className="text-[12px]">正在等待后端自动重试</span>
-            </>
-          ) : (
-            <Spinner size={24} />
-          )}
-        </div>
-      </>
+      <div
+        className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]"
+        aria-live="polite"
+      >
+        <span className="text-[14px]">节点数据暂时无法加载</span>
+        <span className="text-[12px]">正在等待后端自动重试</span>
+      </div>
     );
   }
 

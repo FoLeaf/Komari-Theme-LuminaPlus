@@ -7,12 +7,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useSiteMetadata } from "@/hooks/useSiteMetadata";
 import { useMetricColorsSync } from "@/hooks/useMetricColors";
+import { useNodeStoreStatus } from "@/hooks/useNode";
 
 export function AppShell() {
   useAppearance();
   useSiteMetadata();
   useMetricColorsSync();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const publicConfig = usePublicConfig();
   const auth = useAuth();
   const normalizedPath = (pathname.replace(/\/+$/, "") || "/").toLowerCase();
@@ -31,12 +32,20 @@ export function AppShell() {
     publicConfig.data?.private_site === true &&
     !auth.isPending &&
     auth.data?.logged_in !== true;
+  const isHomeDashboard =
+    normalizedPath === "/" && new URLSearchParams(search).get("view") !== "theme-manage";
+  const canHydrateHome =
+    isHomeDashboard && !isCheckingAccess && !accessError && !isPrivateVisitor;
+  const homeStoreStatus = useNodeStoreStatus(canHydrateHome);
+  const isCheckingHomeData =
+    canHydrateHome && !homeStoreStatus.hydrated && !homeStoreStatus.nodeInfoError;
+  const isCheckingShell = isCheckingAccess || isCheckingHomeData;
   return (
     <div className="relative flex min-h-screen flex-col">
       <BackgroundLayer />
       <main className="app-main flex-1 px-3 pb-8 sm:px-5 md:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-[1720px]">
-          {isCheckingAccess ? (
+          {isCheckingShell ? (
             <div className="flex min-h-[60vh] items-center justify-center">
               <Spinner size={24} />
             </div>

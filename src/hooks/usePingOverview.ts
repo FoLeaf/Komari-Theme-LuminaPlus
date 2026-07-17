@@ -20,8 +20,8 @@ import {
 const DEFAULT_PING_REFRESH_INTERVAL = 60_000;
 const MIN_PING_REFRESH_INTERVAL = 10_000;
 const MAX_PING_REFRESH_INTERVAL = 300_000;
-// 首页延迟图表特意固定为前端聚合的 24 个 bucket。首页卡片是用来快速看趋势的，
-// 所以把最近一小时聚合成 24 等分窗口，而不是每根柱子对应一个后端原始 bucket。
+// 首页延迟图表最多显示 24 个 bucket。metric API 返回的是聚合区间而不是瞬时点，
+// 绘制时要把较粗的后端区间投影到它覆盖的可视 bucket，同时保持卡片密度一致。
 const MAX_VISIBLE_HOMEPAGE_PING_BUCKETS = 24;
 
 const EMPTY_PING: PingOverviewItem = {
@@ -100,17 +100,25 @@ function equalPingItem(a: PingOverviewItem | undefined, b: PingOverviewItem | un
     a.client === b.client &&
     a.isAssigned === b.isAssigned &&
     a.lastValue === b.lastValue &&
+    a.metricIntervalMs === b.metricIntervalMs &&
     a.max === b.max &&
     a.loss === b.loss &&
     equalSamples(a.samples, b.samples)
   );
 }
 
-function buildPingOverviewItems(
+export function buildPingOverviewItems(
   taskId: number,
   records: PingRecord[],
   metricStats: PingTaskStats[] = [],
+  metricIntervalSeconds?: number,
 ) {
+  const metricIntervalMs =
+    typeof metricIntervalSeconds === "number" &&
+    Number.isFinite(metricIntervalSeconds) &&
+    metricIntervalSeconds > 0
+      ? metricIntervalSeconds * 1000
+      : undefined;
   const selectedRecords = records.filter((record) => record.task_id === taskId);
   const grouped = new Map<string, Array<(typeof selectedRecords)[number]>>();
   const lossStatsByClient = new Map<string, { total: number; lost: number }>();
@@ -170,6 +178,7 @@ function buildPingOverviewItems(
       lastValue:
         serverStats?.latest ??
         (latestRecord && latestRecord.value >= 0 ? latestRecord.value : null),
+      metricIntervalMs,
       samples,
       max: serverStats?.max ?? max,
       loss:
@@ -286,10 +295,13 @@ async function buildOverviewMap(
 
     const {
       taskId,
-      overview: { records, tasks, stats },
+      overview: { records, tasks, stats, intervalSeconds },
     } = result.value;
     successfulTaskIds.add(taskId);
-    itemsByTask.set(taskId, buildPingOverviewItems(taskId, records, stats));
+    itemsByTask.set(
+      taskId,
+      buildPingOverviewItems(taskId, records, stats, intervalSeconds),
+    );
 
     const taskInterval = tasks.find((task) => task.id === taskId)?.interval;
     refreshIntervals.push(normalizeRefreshInterval(taskInterval));
@@ -579,61 +591,109 @@ export function useNodePingOverview(uuid: string): PingOverviewItem {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function usePingBuckets(
-  ping: Pick<PingOverviewItem, "samples">,
+export function buildPingBuckets(
+  ping: Pick<PingOverviewItem, "samples" | "metricIntervalMs">,
   count?: number,
+  now = Date.now(),
 ): PingOverviewBucket[] {
-  return useMemo(() => {
-    const now = Date.now();
-    const totalWindowMs = 60 * 60 * 1000;
-    const requestedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
-    const resolvedCount =
-      Number.isFinite(requestedCount) && requestedCount > 0
-        ? Math.min(240, Math.max(1, Math.round(requestedCount)))
-        : MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
-    const bucketMs = totalWindowMs / resolvedCount;
-    const windowStart = now - bucketMs * resolvedCount;
-    const totals = new Array<number>(resolvedCount).fill(0);
-    const losts = new Array<number>(resolvedCount).fill(0);
-    const positiveSums = new Array<number>(resolvedCount).fill(0);
-    const positiveCounts = new Array<number>(resolvedCount).fill(0);
+  const totalWindowMs = 60 * 60 * 1000;
+  const requestedCount = count ?? MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
+  const boundedRequestedCount =
+    Number.isFinite(requestedCount) && requestedCount > 0
+      ? Math.min(240, Math.max(1, Math.round(requestedCount)))
+      : MAX_VISIBLE_HOMEPAGE_PING_BUCKETS;
+  const metricIntervalMs =
+    typeof ping.metricIntervalMs === "number" &&
+    Number.isFinite(ping.metricIntervalMs) &&
+    ping.metricIntervalMs > 0
+      ? ping.metricIntervalMs
+      : 0;
+  const resolvedCount = boundedRequestedCount;
+  const bucketMs = totalWindowMs / resolvedCount;
+  const windowStart = now - totalWindowMs;
+  const totals = new Array<number>(resolvedCount).fill(0);
+  const losts = new Array<number>(resolvedCount).fill(0);
+  const positiveSums = new Array<number>(resolvedCount).fill(0);
+  const positiveCounts = new Array<number>(resolvedCount).fill(0);
 
-    for (const sample of ping.samples ?? []) {
-      if (sample.time < windowStart || sample.time > now) continue;
+  const addSampleToBucket = (
+    bucketIndex: number,
+    sample: PingOverviewItem["samples"][number],
+  ) => {
+    const { total: sampleCount, lost: sampleLost, valid: sampleValid } =
+      resolvePingSampleCounts(sample);
 
-      let bucketIndex = Math.floor((sample.time - windowStart) / bucketMs);
-      if (bucketIndex < 0) continue;
-      if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
+    totals[bucketIndex] += sampleCount;
+    losts[bucketIndex] += sampleLost;
+    // 聚合点的 value 已由 metric 适配层恢复为“成功样本均值”，这里按 valid count
+    // 加权；旧接口/模拟数据没有 count，仍等价于单样本累加。
+    if (sample.value >= 0 && sampleValid > 0) {
+      positiveSums[bucketIndex] += sample.value * sampleValid;
+      positiveCounts[bucketIndex] += sampleValid;
+    }
+  };
 
-      const { total: sampleCount, lost: sampleLost, valid: sampleValid } =
-        resolvePingSampleCounts(sample);
+  for (const sample of ping.samples ?? []) {
+    if (metricIntervalMs > bucketMs) {
+      const sampleEnd = sample.time + metricIntervalMs;
+      if (sampleEnd <= windowStart || sample.time > now) continue;
 
-      totals[bucketIndex] += sampleCount;
-      losts[bucketIndex] += sampleLost;
-      // 聚合点的 value 已由 metric 适配层恢复为“成功样本均值”，这里按 valid count
-      // 加权；旧接口/模拟数据没有 count，仍等价于单样本累加。
-      if (sample.value >= 0 && sampleValid > 0) {
-        positiveSums[bucketIndex] += sample.value * sampleValid;
-        positiveCounts[bucketIndex] += sampleValid;
+      // 后端时间戳是聚合桶起点。以每个可视 bucket 的中点判断它属于哪个
+      // 聚合区间，相当于对粗粒度数据做 sample-and-hold：不会制造规律性空洞，
+      // 也不会因为减少 DOM 数量而让不同节点的柱宽不一致。
+      for (let index = 0; index < resolvedCount; index += 1) {
+        const midpoint = windowStart + (index + 0.5) * bucketMs;
+        if (midpoint >= sample.time && midpoint < sampleEnd) {
+          addSampleToBucket(index, sample);
+        }
       }
+      continue;
     }
 
-    return Array.from({ length: resolvedCount }, (_, index) => {
-      const startAt = windowStart + index * bucketMs;
-      const endAt = startAt + bucketMs;
-      const total = totals[index];
-      const lost = Math.round(losts[index]);
-      const positiveCount = positiveCounts[index];
+    let sampleTime = sample.time;
+    if (metricIntervalMs > 0) {
+      const sampleEnd = sample.time + metricIntervalMs;
+      if (sampleEnd <= windowStart || sample.time > now) continue;
+      const overlapStart = Math.max(sample.time, windowStart);
+      const overlapEnd = Math.min(sampleEnd, now);
+      if (overlapEnd < overlapStart) continue;
+      sampleTime = overlapStart + (overlapEnd - overlapStart) / 2;
+    } else if (sample.time < windowStart || sample.time > now) {
+      continue;
+    }
 
-      return {
-        index,
-        value: positiveCount > 0 ? positiveSums[index] / positiveCount : null,
-        loss: total > 0 ? (lost / total) * 100 : null,
-        total,
-        lost,
-        startAt,
-        endAt,
-      };
-    });
-  }, [count, ping.samples]);
+    let bucketIndex = Math.floor((sampleTime - windowStart) / bucketMs);
+    if (bucketIndex < 0) continue;
+    if (bucketIndex >= resolvedCount) bucketIndex = resolvedCount - 1;
+    addSampleToBucket(bucketIndex, sample);
+  }
+
+  return Array.from({ length: resolvedCount }, (_, index) => {
+    const startAt = windowStart + index * bucketMs;
+    const endAt = startAt + bucketMs;
+    const total = totals[index];
+    const lost = Math.round(losts[index]);
+    const positiveCount = positiveCounts[index];
+
+    return {
+      index,
+      value: positiveCount > 0 ? positiveSums[index] / positiveCount : null,
+      loss: total > 0 ? (lost / total) * 100 : null,
+      total,
+      lost,
+      startAt,
+      endAt,
+    };
+  });
+}
+
+export function usePingBuckets(
+  ping: Pick<PingOverviewItem, "samples" | "metricIntervalMs">,
+  count?: number,
+): PingOverviewBucket[] {
+  const { samples, metricIntervalMs } = ping;
+  return useMemo(
+    () => buildPingBuckets({ samples, metricIntervalMs }, count),
+    [count, metricIntervalMs, samples],
+  );
 }
