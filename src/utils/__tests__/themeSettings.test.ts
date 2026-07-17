@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeThemeSettings } from "@/utils/themeSettings";
 
 describe("normalizeThemeSettings", () => {
-  it("falls removed or unknown saved view modes back to compact", () => {
+  it("keeps mini and falls unknown saved view modes back to compact", () => {
     const settings = normalizeThemeSettings({
       desktopNodeViewMode: "retired-view",
       mobileNodeViewMode: "retired-view",
@@ -10,6 +10,10 @@ describe("normalizeThemeSettings", () => {
 
     expect(settings.desktopNodeViewMode).toBe("compact");
     expect(settings.mobileNodeViewMode).toBe("compact");
+    expect(normalizeThemeSettings({ desktopNodeViewMode: "mini" }).desktopNodeViewMode).toBe(
+      "mini",
+    );
+    expect(normalizeThemeSettings({ mobileNodeViewMode: "mini" }).mobileNodeViewMode).toBe("mini");
     expect(normalizeThemeSettings({ mobileNodeViewMode: "list" }).mobileNodeViewMode).toBe(
       "compact",
     );

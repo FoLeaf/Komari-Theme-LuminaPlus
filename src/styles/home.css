@@ -1,11 +1,18 @@
 /* 首页品牌铭牌：只保留站点名，绝对定位到 AppShell 已经存在的顶部留白里。 */
 .home-brand {
   position: absolute;
-  top: -19px;
+  top: -14px;
   left: 0;
   z-index: 30;
+  display: flex;
+  height: 36px;
   max-width: min(38rem, calc(100vw - 10rem));
+  align-items: center;
   pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease,
+    visibility 160ms ease;
 }
 
 .home-brand-title {
@@ -24,12 +31,22 @@
 
 @media (max-width: 720px) {
   .home-brand {
-    top: -18px;
     max-width: calc(100vw - 8.5rem);
   }
 
   .home-brand-title {
     font-size: 19px;
+  }
+
+}
+
+/* 中小屏的完整快捷栏会占用顶部大部分宽度。由 React 同步显式状态类，兼容
+   Chrome 87，并覆盖平板宽度；折叠后站点名立即恢复。 */
+@media (max-width: 1023px) {
+  .home-dashboard.is-controls-expanded .home-brand {
+    visibility: hidden;
+    opacity: 0;
+    transform: translateX(-8px);
   }
 }
 
@@ -865,6 +882,12 @@
   }
 }
 
+/* 首页顶部为 36px 快捷设置按钮保留最小 48px 控制区：上下各约 6px。
+   iOS PWA 的状态栏安全区由 app-main 统一叠加。 */
+.home-dashboard {
+  padding-top: 28px;
+}
+
 /* 首页控件条复用卡片网格列定义：分组标签落在第一列，排序控件钉在最后一列。 */
 .home-controls-bar {
   align-items: center;
@@ -958,10 +981,52 @@
   .home-controls-bar .home-sort {
     grid-column: auto;
     align-self: auto;
+    flex: 0 0 auto;
+    margin-inline-start: auto;
   }
 }
 
-/* 列表档总览卡密集变体：压矮压密，与表格式节点列表协调。 */
+@media (min-width: 1024px) {
+  .home-brand {
+    top: -18px;
+  }
+
+  .home-dashboard {
+    padding-top: 24px;
+  }
+}
+
+/* 迷你档最多 5 列，但任何断点都不允许卡片窄于 260px；断点按页面实际 gutter
+   和列间距反推，避免 1280px 左右被固定列数压到 216px。 */
+.node-grid-mini {
+  grid-template-columns: repeat(5, minmax(var(--mini-card-min-width, 260px), 1fr));
+}
+
+@media (max-width: 1440px) {
+  .node-grid-mini {
+    grid-template-columns: repeat(4, minmax(var(--mini-card-min-width, 260px), 1fr));
+  }
+}
+
+@media (max-width: 1150px) {
+  .node-grid-mini {
+    grid-template-columns: repeat(3, minmax(var(--mini-card-min-width, 260px), 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .node-grid-mini {
+    grid-template-columns: repeat(2, minmax(var(--mini-card-min-width, 260px), 1fr));
+  }
+}
+
+@media (max-width: 580px) {
+  .node-grid-mini {
+    grid-template-columns: minmax(min(100%, var(--mini-card-min-width, 260px)), 1fr);
+  }
+}
+
+/* 迷你与列表档总览卡使用密集变体。 */
 .home-overview.is-dense {
   gap: 10px;
   margin-bottom: 14px;

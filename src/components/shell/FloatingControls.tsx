@@ -1,12 +1,11 @@
-import { lazy, Suspense, useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, LayoutGrid, List, Monitor, Palette, Rows3, Settings, SlidersHorizontal, Sun, Moon } from "lucide-react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Grid3x3, LayoutGrid, List, Monitor, Palette, Rows3, Settings, SlidersHorizontal, Sun, Moon } from "lucide-react";
+import { Link } from "react-router-dom";
 import { usePreferences } from "@/hooks/usePreferences";
 import { useViewMode } from "@/hooks/useViewMode";
 import { useNodeStoreStatus } from "@/hooks/useNode";
 import { useAuth } from "@/hooks/useAuth";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
-import { usePublicConfig } from "@/hooks/usePublicConfig";
 import type { NodeViewMode } from "@/utils/themeSettings";
 import { clsx } from "clsx";
 
@@ -19,6 +18,7 @@ const MetricColorPicker = lazy(() =>
 const VIEW_MODE_META: Record<NodeViewMode, { icon: typeof LayoutGrid; label: string }> = {
   large: { icon: LayoutGrid, label: "大视图" },
   compact: { icon: Rows3, label: "小视图" },
+  mini: { icon: Grid3x3, label: "迷你视图" },
   list: { icon: List, label: "列表视图" },
 };
 
@@ -28,30 +28,16 @@ const APPEARANCE_OPTIONS = [
   { value: "dark", icon: Moon, label: "深色" },
 ] as const;
 
-export function FloatingControls() {
-  const [searchParams] = useSearchParams();
-  const { pathname } = useLocation();
-  if (
-    pathname === "/404" ||
-    (pathname === "/" && searchParams.get("view") === "theme-manage")
-  ) {
-    return null;
-  }
-  return <FloatingControlsInner isHome={pathname === "/"} pathname={pathname} />;
-}
-
-function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname: string }) {
+export function FloatingControls({
+  onExpandedChange,
+}: {
+  onExpandedChange?: (expanded: boolean) => void;
+}) {
   const { appearance, setAppearance } = usePreferences();
   const { mode, nextMode, toggleMode } = useViewMode();
   const { data: me } = useAuth();
-  const { data: publicConfig } = usePublicConfig();
   const themeSettings = useThemeSettings();
-  const usesNodeStore =
-    pathname === "/assets" ||
-    pathname === "/traffic" ||
-    pathname.startsWith("/instance/") ||
-    (isHome && (publicConfig?.private_site !== true || me?.logged_in === true));
-  const { failureStreak } = useNodeStoreStatus(usesNodeStore);
+  const { failureStreak } = useNodeStoreStatus();
   const [collapsed, setCollapsed] = useState(true);
   const [colorsOpen, setColorsOpen] = useState(false);
   const [colorsMounted, setColorsMounted] = useState(false);
@@ -67,6 +53,18 @@ function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname
   const ViewIcon = VIEW_MODE_META[nextMode].icon;
   // 只要不在最宽松的大卡默认态,就视为"已切换"，按钮保持高亮。
   const isReducedView = mode !== "large";
+  useEffect(() => {
+    onExpandedChange?.(false);
+    return () => onExpandedChange?.(false);
+  }, [onExpandedChange]);
+
+  const toggleControls = () => {
+    // 收起快捷栏时同时结束子面板状态，避免下次展开时调色盘自动复现。
+    const nextCollapsed = !collapsed;
+    if (nextCollapsed) setColorsOpen(false);
+    setCollapsed(nextCollapsed);
+    onExpandedChange?.(!nextCollapsed);
+  };
 
   return (
     <div
@@ -82,7 +80,7 @@ function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname
             {settingsReady && (
               <>
                 <div
-                  className="control-group"
+                  className="control-group floating-controls-appearance"
                   role="group"
                   aria-label="外观选择"
                 >
@@ -96,8 +94,8 @@ function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname
                       title={label}
                       tabIndex={hiddenTabIndex}
                       className={clsx(
-                        "control-button control-toggle grid h-9 w-9 place-items-center",
-                        appearance === value && "is-active",
+                        "control-button grid h-9 w-9 place-items-center",
+                        appearance === value && "control-toggle is-active",
                       )}
                     >
                       <Icon size={16} />
@@ -167,7 +165,7 @@ function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname
             className="control-button floating-controls-trigger grid h-9 w-9 place-items-center"
             aria-label={collapsed ? "展开快捷按钮" : "收起快捷按钮"}
             aria-expanded={!collapsed}
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={toggleControls}
             title={collapsed ? "展开快捷按钮" : "收起快捷按钮"}
           >
             <ToggleIcon size={16} />
@@ -181,8 +179,8 @@ function FloatingControlsInner({ isHome, pathname }: { isHome: boolean; pathname
             <MetricColorPicker hidden={collapsed || !colorsOpen} />
           </Suspense>
         )}
-        {showSyncWarning && !collapsed && (
-          <div className="pointer-events-none flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--status-offline)_32%,transparent)] bg-[color-mix(in_srgb,var(--surface-a)_90%,transparent)] px-3 py-1 text-[11px] font-medium text-[var(--status-offline)] shadow-[0_10px_25px_-18px_rgba(0,0,0,0.8)] backdrop-blur">
+        {showSyncWarning && !collapsed && !colorsOpen && (
+          <div className="floating-controls-sync-warning pointer-events-none flex items-center gap-2 rounded-full border border-[color-mix(in_srgb,var(--status-offline)_32%,transparent)] bg-[color-mix(in_srgb,var(--surface-a)_90%,transparent)] px-3 py-1 text-[11px] font-medium text-[var(--status-offline)] shadow-[0_10px_25px_-18px_rgba(0,0,0,0.8)] backdrop-blur">
             <AlertTriangle size={12} />
             <span>实时状态同步异常，当前展示的是最近缓存</span>
           </div>

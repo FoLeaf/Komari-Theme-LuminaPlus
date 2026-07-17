@@ -1,6 +1,7 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { NodeGrid } from "@/components/node/NodeGrid";
+import { FloatingControls } from "@/components/shell/FloatingControls";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -9,6 +10,7 @@ const ThemeManage = lazy(() =>
 );
 
 export function Home() {
+  const [controlsExpanded, setControlsExpanded] = useState(false);
   const [searchParams] = useSearchParams();
   const {
     data: me,
@@ -75,7 +77,10 @@ export function Home() {
   }
 
   return (
-    <div className="relative py-2">
+    <div
+      className={`home-dashboard relative pb-2${controlsExpanded ? " is-controls-expanded" : ""}`}
+    >
+      <FloatingControls onExpandedChange={setControlsExpanded} />
       <NodeGrid />
     </div>
   );

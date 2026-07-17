@@ -25,7 +25,7 @@ import {
 import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
 
 export type Appearance = "system" | "light" | "dark";
-export type NodeViewMode = "large" | "compact" | "list";
+export type NodeViewMode = "large" | "compact" | "mini" | "list";
 
 export interface ResolvedThemeSettings {
   defaultAppearance: Appearance;
@@ -119,7 +119,7 @@ function normalizeAppearance(
 }
 
 export function isNodeViewMode(value: unknown): value is NodeViewMode {
-  return value === "large" || value === "compact" || value === "list";
+  return value === "large" || value === "compact" || value === "mini" || value === "list";
 }
 
 function normalizeNodeViewMode(
@@ -127,7 +127,7 @@ function normalizeNodeViewMode(
   fallback: NodeViewMode,
 ): NodeViewMode {
   if (isNodeViewMode(value)) return value;
-  // 已删除档位或其他旧字符串统一落到小卡，避免升级后出现无选中项。
+  // 未知旧字符串统一落到小卡，避免升级后出现无选中项。
   return typeof value === "string" && value.length > 0 ? "compact" : fallback;
 }
 

@@ -1,7 +1,6 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Lock } from "lucide-react";
 import { BackgroundLayer } from "./BackgroundLayer";
-import { FloatingControls } from "./FloatingControls";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAppearance } from "@/hooks/useAppearance";
 import { useAuth } from "@/hooks/useAuth";
@@ -32,12 +31,10 @@ export function AppShell() {
     publicConfig.data?.private_site === true &&
     !auth.isPending &&
     auth.data?.logged_in !== true;
-
   return (
     <div className="relative flex min-h-screen flex-col">
       <BackgroundLayer />
-      {!isCheckingAccess && !accessError && !isPrivateVisitor && <FloatingControls />}
-      <main className="flex-1 px-3 pb-8 pt-5 max-[720px]:pt-16 sm:px-5 md:px-6 lg:px-8 lg:pt-6">
+      <main className="app-main flex-1 px-3 pb-8 sm:px-5 md:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-[1720px]">
           {isCheckingAccess ? (
             <div className="flex min-h-[60vh] items-center justify-center">

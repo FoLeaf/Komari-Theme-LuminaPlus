@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
 import { Flag } from "@/components/ui/Flag";
 import { useAuth } from "@/hooks/useAuth";
-import { useAllNodeMeta, useHomeNodeSummaries } from "@/hooks/useNode";
+import { useAllNodeMeta, useHomeNodeSummaries, useNodeStoreStatus } from "@/hooks/useNode";
 import { useHomepagePingOverview } from "@/hooks/usePingOverview";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
@@ -39,6 +39,7 @@ import {
 } from "@/utils/overviewRating";
 import { Spinner } from "@/components/ui/Spinner";
 import { CompactNodeCard } from "./CompactNodeCard";
+import { MiniNodeCard } from "./MiniNodeCard";
 import { NodeCard } from "./NodeCard";
 import { NodeListView } from "./NodeListView";
 import { RenewalReminder } from "./RenewalReminder";
@@ -49,9 +50,12 @@ import type { NodeInfo } from "@/types/komari";
 const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
   large: { className: "grid gap-4 xl:gap-5", minColumnWidth: 360 },
   compact: { className: "grid gap-3 xl:gap-4", minColumnWidth: 340 },
+  mini: { className: "grid gap-3 xl:gap-3.5", minColumnWidth: 260 },
   // 占位以满足 Record 穷尽。
   list: { className: "", minColumnWidth: 0 },
 };
+
+type MiniGridStyle = CSSProperties & { "--mini-card-min-width": string };
 
 // 标准 UUID 不含逗号，可安全拼成稳定签名。
 const UUID_KEY_SEPARATOR = ",";
@@ -104,7 +108,6 @@ function HomeBrand({ siteName }: { siteName: string }) {
 }
 
 function HomeOverviewCards({
-  siteName,
   overview,
   costSummary,
   costLoading,
@@ -120,7 +123,6 @@ function HomeOverviewCards({
   dense,
   onWarmTraffic,
 }: {
-  siteName: string;
   overview: HomeOverview;
   costSummary: { remainingCny: number } | null;
   costLoading: boolean;
@@ -188,9 +190,7 @@ function HomeOverviewCards({
   return (
     <section className={`home-overview${dense ? " is-dense" : ""}`} aria-label="首页总览">
       <article className="overview-card" data-metric="online">
-        <h1 className="overview-card-label overview-card-site-name" title={siteName}>
-          {siteName}
-        </h1>
+        <span className="overview-card-label">在线节点</span>
         <div className="overview-card-main">
           <p className="overview-card-value">
             {overview.onlineNodes}
@@ -219,6 +219,26 @@ function HomeOverviewCards({
         )}
       </article>
 
+      <article className="overview-card" data-metric="bandwidth">
+        <span className="overview-card-label">实时带宽</span>
+        <div className="overview-card-main">
+          <p
+            className="overview-card-value"
+            style={{ color: speedRateColor(rate.unit) }}
+          >
+            {rate.value}
+            <span className="overview-card-unit">{rate.unit}</span>
+          </p>
+        </div>
+        <div className="overview-card-footer">
+          <p className="overview-card-sub" title={bandwidthDetailLabel}>
+            <span className="overview-card-sub-full">{bandwidthDetailLabel}</span>
+            <span className="overview-card-sub-compact">{bandwidthCompactLabel}</span>
+          </p>
+          {renderRating(bandwidthRating)}
+        </div>
+      </article>
+
       <article className="overview-card" data-metric="traffic">
         <div className="overview-card-head">
           <span className="overview-card-label">累计流量</span>
@@ -245,26 +265,6 @@ function HomeOverviewCards({
             <span className="overview-card-sub-compact">{trafficCompactLabel}</span>
           </p>
           {renderRating(trafficRating)}
-        </div>
-      </article>
-
-      <article className="overview-card" data-metric="bandwidth">
-        <span className="overview-card-label">实时带宽</span>
-        <div className="overview-card-main">
-          <p
-            className="overview-card-value"
-            style={{ color: speedRateColor(rate.unit) }}
-          >
-            {rate.value}
-            <span className="overview-card-unit">{rate.unit}</span>
-          </p>
-        </div>
-        <div className="overview-card-footer">
-          <p className="overview-card-sub" title={bandwidthDetailLabel}>
-            <span className="overview-card-sub-full">{bandwidthDetailLabel}</span>
-            <span className="overview-card-sub-compact">{bandwidthCompactLabel}</span>
-          </p>
-          {renderRating(bandwidthRating)}
         </div>
       </article>
 
@@ -362,6 +362,7 @@ export function NodeGrid() {
   const queryClient = useQueryClient();
   const nodes = useHomeNodeSummaries();
   const allMeta = useAllNodeMeta();
+  const { hydrated: storeHydrated, nodeInfoError } = useNodeStoreStatus();
   const { data: me } = useAuth();
   const { data: publicConfig } = usePublicConfig();
   const siteName = publicConfig?.sitename?.trim() || "节点概览";
@@ -584,7 +585,9 @@ export function NodeGrid() {
         ? null
         : orderedUuids.map((uuid) => (
             <div key={uuid} className="min-w-0">
-              {mode === "compact" ? (
+              {mode === "mini" ? (
+                <MiniNodeCard uuid={uuid} />
+              ) : mode === "compact" ? (
                 <CompactNodeCard uuid={uuid} />
               ) : (
                 <NodeCard uuid={uuid} />
@@ -600,14 +603,17 @@ export function NodeGrid() {
   const showRegionBar =
     themeSettings.isReady && themeSettings.showRegionBar && regionOptions.length > 1;
   // 分组标签栏与卡片网格共用列定义，让标签栏左缘对齐首卡。
+  const isMini = mode === "mini";
   const isList = mode === "list";
   const { className: gridClassName, minColumnWidth } = GRID_LAYOUT[mode];
-  const gridWrapClassName = gridClassName;
+  const gridWrapClassName = isMini ? `${gridClassName} node-grid-mini` : gridClassName;
   const gridStyle = isList
     ? undefined
-    : { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))` };
-  // 列表档的分组栏借用小卡列宽。
-  const borrowControlsGrid = isList;
+    : isMini
+      ? ({ "--mini-card-min-width": `${minColumnWidth}px` } as MiniGridStyle)
+      : { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minColumnWidth}px), 1fr))` };
+  // 迷你与列表档的控件栏借用小卡列宽，避免跟随密集内容列而被压窄。
+  const borrowControlsGrid = isMini || isList;
   const controlsWrapClassName = borrowControlsGrid
     ? "grid gap-3 home-controls-bar mb-4"
     : `${gridWrapClassName} home-controls-bar mb-4`;
@@ -615,11 +621,24 @@ export function NodeGrid() {
     ? { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, 340px), 1fr))` }
     : gridStyle;
 
-  if (!themeSettings.isReady) {
+  if (!themeSettings.isReady || !storeHydrated) {
     return (
-      <div className="flex h-[40vh] items-center justify-center">
-        <Spinner size={24} />
-      </div>
+      <>
+        <HomeBrand siteName={siteName} />
+        <div
+          className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]"
+          aria-live="polite"
+        >
+          {nodeInfoError ? (
+            <>
+              <span className="text-[14px]">节点数据暂时无法加载</span>
+              <span className="text-[12px]">正在等待后端自动重试</span>
+            </>
+          ) : (
+            <Spinner size={24} />
+          )}
+        </div>
+      </>
     );
   }
 
@@ -638,12 +657,11 @@ export function NodeGrid() {
           </span>
         </Link>
       )}
-      {!showHomeOverview && <HomeBrand siteName={siteName} />}
+      <HomeBrand siteName={siteName} />
       {showHomeOverview && (
         <HomeOverviewCards
-          siteName={siteName}
           overview={overview}
-          dense={mode === "list"}
+          dense={mode === "mini" || mode === "list"}
           showDetailButton={showCostDetailButton}
           renewalNodes={visibleMeta}
           costSummary={costSummary}

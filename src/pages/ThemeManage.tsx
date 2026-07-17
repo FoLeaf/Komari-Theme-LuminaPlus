@@ -7,6 +7,7 @@ import {
   ChevronUp,
   CircleDollarSign,
   EyeOff,
+  Grid3x3,
   LayoutTemplate,
   LayoutGrid,
   List,
@@ -83,6 +84,7 @@ const APPEARANCE_OPTIONS = [
 const NODE_VIEW_MODE_OPTIONS = [
   { value: "large", label: "大卡片", icon: LayoutGrid },
   { value: "compact", label: "小卡片", icon: Rows3 },
+  { value: "mini", label: "迷你卡片", icon: Grid3x3 },
   { value: "list", label: "列表", icon: List },
 ] as const;
 const MOBILE_VIEW_MODE_OPTIONS = NODE_VIEW_MODE_OPTIONS.filter((option) => option.value !== "list");
