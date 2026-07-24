@@ -46,6 +46,7 @@ import {
 import {
   calculateCostSummary,
   calculateCostPremiumAmount,
+  calculateCostPremiumBasisAt,
   formatCnyMoney,
   formatSignedCny,
   getExchangeRates,
@@ -62,6 +63,8 @@ import {
   sortHomeGroupOptions,
 } from "@/utils/homeNodes";
 import {
+  HOMEPAGE_MULTI_PING_TASK_COUNT,
+  normalizeHomepageMultiPingTaskIds,
   normalizeHomepagePingTaskBindings,
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
@@ -258,6 +261,8 @@ function pickManagedThemeSettings(settings: ResolvedThemeSettings) {
     desktopNodeViewMode: settings.desktopNodeViewMode,
     mobileNodeViewMode: settings.mobileNodeViewMode,
     homepagePingBindings: settings.homepagePingBindings,
+    enableHomepageMultiPing: settings.enableHomepageMultiPing,
+    homepageMultiPingTaskIds: settings.homepageMultiPingTaskIds,
     fakePingForUnbound: settings.fakePingForUnbound,
     showHomeOverview: settings.showHomeOverview,
     showGroupTabs: settings.showGroupTabs,
@@ -386,6 +391,22 @@ export function ThemeManage() {
     },
     [],
   );
+  const patchMultiPingTask = useCallback((slot: number, rawValue: string) => {
+    editVersionRef.current += 1;
+    setDraft((prev) => {
+      const nextIds = [...prev.homepageMultiPingTaskIds];
+      if (rawValue === "") {
+        nextIds.splice(slot, 1);
+      } else {
+        nextIds[slot] = Number(rawValue);
+      }
+      const homepageMultiPingTaskIds = normalizeHomepageMultiPingTaskIds(nextIds);
+      return JSON.stringify(homepageMultiPingTaskIds) ===
+        JSON.stringify(prev.homepageMultiPingTaskIds)
+        ? prev
+        : { ...prev, homepageMultiPingTaskIds };
+    });
+  }, []);
 
   const {
     data: pingTasks,
@@ -511,16 +532,33 @@ export function ThemeManage() {
     return map;
   }, [allMeta, now, sourceThemeSettings.costIgnoredNodes, premiumRateQuery.data]);
 
-  // 首次录入使用当前剩余价值作为折算基准；后续编辑由 paidCny-amount 还原并沿用该基准。
-  const currentPremiumBasis = useCallback(
-    (uuid: string): number | null => {
-      const detail = premiumDetailByUuid.get(uuid);
-      if (!detail) return null;
-      if (detail.note === "免费") return 0;
-      if (!detail.counted) return null;
-      return detail.remainingCny;
+  // 使用当前价格、周期、到期日和汇率回算指定收购日的剩余价值；结果只在用户编辑
+  // 收购价/日期时用于固化溢价，不会因后续续费或汇率变化自动改写。
+  const premiumBasisAt = useCallback(
+    (uuid: string, acquiredAt?: string): number | null => {
+      if (!premiumRateQuery.data) return null;
+      if (!acquiredAt || acquiredAt === localDateInputMax()) {
+        const detail = premiumDetailByUuid.get(uuid);
+        if (!detail) return null;
+        if (detail.note === "免费") return 0;
+        return detail.counted ? detail.remainingCny : null;
+      }
+      return calculateCostPremiumBasisAt(
+        allMeta,
+        sourceThemeSettings.costIgnoredNodes,
+        premiumRateQuery.data.rates,
+        uuid,
+        acquiredAt,
+        now,
+      );
     },
-    [premiumDetailByUuid],
+    [
+      allMeta,
+      now,
+      premiumDetailByUuid,
+      sourceThemeSettings.costIgnoredNodes,
+      premiumRateQuery.data,
+    ],
   );
 
   const premiumConfiguredCount = useMemo(
@@ -528,7 +566,7 @@ export function ThemeManage() {
     [draft.costPremiums],
   );
 
-  // 收购价清空即删条目;溢价在此刻算出并固化,不随后续续费/汇率漂移。
+  // 收购价清空即删条目；溢价按收购日的回算剩余价值算出并固化，不随后续续费/汇率漂移。
   const patchPremiumPaid = useCallback(
     (uuid: string, rawValue: string) => {
       editVersionRef.current += 1;
@@ -543,9 +581,13 @@ export function ThemeManage() {
         if (!Number.isFinite(paid) || paid < 0) return prev;
         const current = prev.costPremiums[uuid];
         if (current && Object.is(current.paidCny, paid)) return prev;
-        const basis = currentPremiumBasis(uuid);
-        if (basis == null) return prev;
         const acquiredAt = current?.acquiredAt ?? localDateInputMax();
+        const storedBasis =
+          current?.paidCny != null ? current.paidCny - current.amount : Number.NaN;
+        const basis = Number.isFinite(storedBasis)
+          ? storedBasis
+          : premiumBasisAt(uuid, acquiredAt);
+        if (basis == null) return prev;
         next[uuid] = buildPremiumEntry(
           calculateCostPremiumAmount(paid, basis, current),
           paid,
@@ -554,10 +596,10 @@ export function ThemeManage() {
         return { ...prev, costPremiums: next };
       });
     },
-    [currentPremiumBasis],
+    [premiumBasisAt],
   );
 
-  // 收购日期只决定摊销跨度，不回溯改写已经固化的溢价基准。
+  // 主动修改收购日期时重新回算该日剩余价值并固化新溢价；保存后仍保持固定。
   const patchPremiumAcquiredAt = useCallback(
     (uuid: string, rawValue: string) => {
       editVersionRef.current += 1;
@@ -566,12 +608,18 @@ export function ThemeManage() {
         if (!current) return prev;
         const acquiredAt = rawValue.trim() || undefined;
         if (current.acquiredAt === acquiredAt) return prev;
+        let amount = current.amount;
+        if (acquiredAt && current.paidCny != null) {
+          const basis = premiumBasisAt(uuid, acquiredAt);
+          if (basis == null) return prev;
+          amount = calculateCostPremiumAmount(current.paidCny, basis);
+        }
         const next = { ...prev.costPremiums };
-        next[uuid] = buildPremiumEntry(current.amount, current.paidCny, acquiredAt);
+        next[uuid] = buildPremiumEntry(amount, current.paidCny, acquiredAt);
         return { ...prev, costPremiums: next };
       });
     },
-    [],
+    [premiumBasisAt],
   );
 
   const draftHiddenNodes = useMemo(
@@ -580,6 +628,9 @@ export function ThemeManage() {
   );
   const draftCostRateApiUrlInvalid =
     draft.costRateApiUrl.trim() !== "" && !isCostRateApiUrlValid(draft.costRateApiUrl.trim());
+  const draftMultiPingInvalid =
+    draft.enableHomepageMultiPing &&
+    draft.homepageMultiPingTaskIds.length !== HOMEPAGE_MULTI_PING_TASK_COUNT;
 
   // 由当前草稿拼出的设置 payload,保存请求和 dirty 判断都用它。草稿字段与设置同名,这里只做
   // 「编辑态 → 存储态」的换形与归一化;文本域(hiddenNodesText/costIgnoredText)和 ratingLabels
@@ -639,7 +690,7 @@ export function ThemeManage() {
   );
 
   const handleSave = async () => {
-    if (!config?.theme || savingDraftRef.current) return;
+    if (!config?.theme || savingDraftRef.current || draftMultiPingInvalid) return;
     const submittedEditVersion = editVersionRef.current;
     savingDraftRef.current = draft;
     setSaving(true);
@@ -775,7 +826,9 @@ export function ThemeManage() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={!isDirty || saving || draftCostRateApiUrlInvalid}
+              disabled={
+                !isDirty || saving || draftCostRateApiUrlInvalid || draftMultiPingInvalid
+              }
               className="theme-manage-button is-primary"
             >
               {saving ? <Spinner size={14} /> : <Save size={14} />}
@@ -799,7 +852,9 @@ export function ThemeManage() {
             <div>
               <dt>已绑定 Ping</dt>
               <dd>
-                {assignedNodeCount} / {sortedClients.length}
+                {draft.enableHomepageMultiPing
+                  ? `三网 ${draft.homepageMultiPingTaskIds.length} / 3`
+                  : `${assignedNodeCount} / ${sortedClients.length}`}
               </dd>
             </div>
           </dl>
@@ -1464,7 +1519,7 @@ export function ThemeManage() {
       <InstancePanel
         kicker={<><span className="instance-panel-kicker-num">08</span>溢价</>}
         title="收购溢价"
-        description="填写实际收购价（人民币），首次录入时按当前剩余价值计算并固化溢价（收购价 − 当前剩余价值，可正可负）；后续续费、汇率和收购日期变化不会改写该基准。收购日期默认今天，可调整为过去日期，仅用于计算溢价月摊与尚未摊销价值；免费节点的收购价全额记为溢价，留空即清除记录。"
+        description="填写实际收购价（人民币），系统使用当前价格、周期、到期日和汇率回算收购日的剩余价值，再固化溢价（收购价 − 收购日剩余价值，可正可负）。后续续费和汇率变化不会自动改写；主动修改收购日期时会重新计算并固化。收购日期同时用于溢价月摊与尚未摊销价值；免费节点的收购价全额记为溢价，留空即清除记录。"
         aside={
           <div className="text-[11px] text-[var(--text-tertiary)]">
             {clientsLoading ? "载入中" : `已设置 ${premiumConfiguredCount} 个节点`}
@@ -1547,7 +1602,7 @@ export function ThemeManage() {
                           }}
                           title={
                             entry.paidCny != null
-                              ? "溢价 = 收购价 − 首次录入时的剩余价值；该折算基准已经固化"
+                              ? "溢价 = 收购价 − 收购日剩余价值；该折算基准已经固化"
                               : "旧格式：直接记录的溢价，填写收购价后自动升级"
                           }
                         >
@@ -1582,7 +1637,7 @@ export function ThemeManage() {
                         }
                         disabled={!entry}
                         aria-label={`${client.name} 的收购日期`}
-                        title="收购日期（可选）：仅用于计算溢价月摊和尚未摊销价值，不改写溢价"
+                        title="收购日期：修改后会按当前价格、周期、到期日和汇率回算该日剩余价值，重新计算并固化溢价"
                         className="surface-inset w-[8.75rem] px-2 py-1 text-[12px] outline-none disabled:opacity-45"
                       />
                     </div>
@@ -1599,7 +1654,7 @@ export function ThemeManage() {
         title="主页延迟检测"
         description={
           <>
-            为首页延迟卡片指定对应的 Ping 任务与展示节点。每个节点只能归属一个任务；未分配的节点不会显示延迟。
+            单线路模式为每个节点绑定一项 Ping 任务；开启三网模式后，大卡片和小卡片统一展示指定的三项任务，迷你卡片与列表仍显示节点的单线路绑定。
             {" "}
             如果当前还没有可用任务，请先前往
             {" "}
@@ -1612,11 +1667,110 @@ export function ThemeManage() {
         }
         aside={
           <div className="text-[11px] text-[var(--text-tertiary)]">
-            {tasksLoading || clientsLoading ? "载入中" : `${sortedTasks.length} 个任务`}
+            {tasksLoading || clientsLoading
+              ? "载入中"
+              : draft.enableHomepageMultiPing
+                ? `三网 ${draft.homepageMultiPingTaskIds.length} / 3`
+                : `${sortedTasks.length} 个任务`}
           </div>
         }
       >
         <div className="flex flex-col gap-4">
+          <div
+            className={clsx(
+              "surface-inset px-4 py-4",
+              draft.enableHomepageMultiPing &&
+                "border-[color-mix(in_srgb,var(--accent-500)_32%,var(--hairline))]",
+            )}
+          >
+            <label className="flex items-start justify-between gap-4">
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+                  开启三网模式
+                </span>
+                <span className="mt-1 block text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+                  默认关闭。开启后大卡片和小卡片统一显示下面三项 Ping
+                  任务；迷你卡片与列表继续使用原有单线路绑定。
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={draft.enableHomepageMultiPing}
+                disabled={
+                  !draft.enableHomepageMultiPing &&
+                  !tasksLoading &&
+                  sortedTasks.length < HOMEPAGE_MULTI_PING_TASK_COUNT
+                }
+                onChange={(event) =>
+                  patch("enableHomepageMultiPing", event.target.checked)
+                }
+                className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-500)]"
+              />
+            </label>
+
+            {draft.enableHomepageMultiPing && (
+              <div className="mt-4 border-t border-[var(--hairline)] pt-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  {Array.from(
+                    { length: HOMEPAGE_MULTI_PING_TASK_COUNT },
+                    (_, slot) => {
+                      const selectedTaskId =
+                        draft.homepageMultiPingTaskIds[slot];
+                      return (
+                        <label key={slot} className="min-w-0">
+                          <span className="mb-1.5 block text-[11px] font-medium text-[var(--text-secondary)]">
+                            线路 {slot + 1}
+                          </span>
+                          <select
+                            value={selectedTaskId ?? ""}
+                            onChange={(event) =>
+                              patchMultiPingTask(slot, event.target.value)
+                            }
+                            aria-label={`三网线路 ${slot + 1}`}
+                            className="surface-inset w-full px-3 py-2 text-[13px] text-[var(--text-primary)] outline-none"
+                          >
+                            <option value="">选择 Ping 任务</option>
+                            {selectedTaskId != null &&
+                              !sortedTasks.some((task) => task.id === selectedTaskId) && (
+                                <option value={selectedTaskId}>
+                                  任务 #{selectedTaskId}（当前不可用）
+                                </option>
+                              )}
+                            {sortedTasks.map((task) => (
+                              <option
+                                key={task.id}
+                                value={task.id}
+                                disabled={
+                                  task.id !== selectedTaskId &&
+                                  draft.homepageMultiPingTaskIds.includes(task.id)
+                                }
+                              >
+                                {task.name || `任务 #${task.id}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    },
+                  )}
+                </div>
+                <p
+                  className={clsx(
+                    "mt-3 text-[11px] leading-relaxed",
+                    draftMultiPingInvalid
+                      ? "text-[var(--status-error)]"
+                      : "text-[var(--text-tertiary)]",
+                  )}
+                  role={draftMultiPingInvalid ? "alert" : undefined}
+                >
+                  {draftMultiPingInvalid
+                    ? "请选满 3 个不同的 Ping 任务后再保存。"
+                    : "三项任务按这里的顺序显示；某项任务没有节点样本时保留该行并显示“无样本”。"}
+                </p>
+              </div>
+            )}
+          </div>
+
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
             <label className="surface-inset flex items-center gap-2 px-3 py-2">
               <Search size={14} className="text-[var(--text-tertiary)]" />
@@ -1631,10 +1785,18 @@ export function ThemeManage() {
             <div className="surface-inset flex items-center justify-between gap-3 px-3 py-2 text-[12px] text-[var(--text-secondary)]">
               <span>首页绑定总数</span>
               <strong className="text-[var(--text-primary)]">
-                {assignedNodeCount} / {sortedClients.length}
+                {draft.enableHomepageMultiPing
+                  ? `${draft.homepageMultiPingTaskIds.length} / 3 条线路`
+                  : `${assignedNodeCount} / ${sortedClients.length}`}
               </strong>
             </div>
           </div>
+
+          {draft.enableHomepageMultiPing && (
+            <div className="text-[11px] text-[var(--text-tertiary)]">
+              下方单线路绑定继续用于迷你卡片和列表；大卡片与小卡片使用上方三项任务。
+            </div>
+          )}
 
           <label className="surface-inset flex items-center justify-between gap-3 px-4 py-3">
             <span className="min-w-0">
@@ -1642,8 +1804,9 @@ export function ThemeManage() {
                 未绑定节点显示模拟延迟
               </span>
               <span className="mt-1 block text-[11px] text-[var(--text-tertiary)]">
-                未绑定 Ping 任务的在线节点在首页卡片显示前端生成的模拟数据（延迟 1-10ms、丢包
-                0%），仅用于视觉统一，不代表真实网络质量；离线节点仍显示“未配置”。
+                未绑定单线路 Ping 任务的在线节点显示前端生成的模拟数据（延迟 1-10ms、丢包
+                0%）。开启三网模式时仍用于迷你卡片和列表，大卡片与小卡片显示真实三网数据；
+                模拟数据仅用于视觉统一，不代表真实网络质量。
               </span>
             </span>
             <input

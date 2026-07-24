@@ -362,7 +362,9 @@ const MiniHealth = memo(function MiniHealth({
 
 export const MiniNodeCard = memo(function MiniNodeCard({ uuid }: { uuid: string }) {
   const { resolvedAppearance } = usePreferences();
-  const model = useNodeCardModel(uuid, HEALTH_BAR_COUNT);
+  const model = useNodeCardModel(uuid, {
+    pingBucketCount: HEALTH_BAR_COUNT,
+  });
 
   if (!model.node) {
     return <article className="mini-node-card animate-pulse" aria-busy />;

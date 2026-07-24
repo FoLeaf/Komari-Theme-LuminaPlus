@@ -22,7 +22,11 @@ import {
   type HomeSortDirection,
   type HomeSortField,
 } from "@/utils/homeSort";
-import { normalizeHomepagePingTaskBindings, type HomepagePingTaskBindings } from "@/utils/pingTasks";
+import {
+  normalizeHomepageMultiPingTaskIds,
+  normalizeHomepagePingTaskBindings,
+  type HomepagePingTaskBindings,
+} from "@/utils/pingTasks";
 
 export type Appearance = "system" | "light" | "dark";
 export type NodeViewMode = "large" | "compact" | "mini" | "list";
@@ -34,6 +38,8 @@ export interface ResolvedThemeSettings {
   enableAdminButton: boolean;
   showPingChart: boolean;
   homepagePingBindings: HomepagePingTaskBindings;
+  enableHomepageMultiPing: boolean;
+  homepageMultiPingTaskIds: number[];
   fakePingForUnbound: boolean;
   showHomeOverview: boolean;
   showGroupTabs: boolean;
@@ -74,6 +80,8 @@ export const DEFAULT_THEME_SETTINGS: ResolvedThemeSettings = {
   enableAdminButton: true,
   showPingChart: true,
   homepagePingBindings: {},
+  enableHomepageMultiPing: false,
+  homepageMultiPingTaskIds: [],
   fakePingForUnbound: false,
   showHomeOverview: true,
   showGroupTabs: true,
@@ -166,6 +174,9 @@ function normalizeHomeSortDefault(
 export function normalizeThemeSettings(
   settings: (ThemeSettings & Record<string, unknown>) | null | undefined,
 ): ResolvedThemeSettings {
+  const homepageMultiPingTaskIds = normalizeHomepageMultiPingTaskIds(
+    settings?.homepageMultiPingTaskIds,
+  );
   return {
     defaultAppearance: normalizeAppearance(settings?.defaultAppearance),
     desktopNodeViewMode: normalizeNodeViewMode(
@@ -179,6 +190,9 @@ export function normalizeThemeSettings(
     enableAdminButton: enabledUnlessFalse(settings?.enableAdminButton),
     showPingChart: enabledUnlessFalse(settings?.showPingChart),
     homepagePingBindings: normalizeHomepagePingTaskBindings(settings?.homepagePingBindings),
+    // 保留开关原值，让管理页能呈现并修复不完整配置；首页消费方仅在任务恰好为三项时启用。
+    enableHomepageMultiPing: settings?.enableHomepageMultiPing === true,
+    homepageMultiPingTaskIds,
     // 默认关闭(需手动开启):给访客展示的是模拟数据,必须由站长显式决定。
     fakePingForUnbound: settings?.fakePingForUnbound === true,
     showHomeOverview: enabledUnlessFalse(settings?.showHomeOverview),

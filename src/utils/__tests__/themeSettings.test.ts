@@ -24,6 +24,23 @@ describe("normalizeThemeSettings", () => {
     expect(normalizeThemeSettings({ showOverviewRatings: false }).showOverviewRatings).toBe(false);
   });
 
+  it("normalizes homepage multi-ping tasks while preserving an enabled draft for repair", () => {
+    expect(normalizeThemeSettings({}).enableHomepageMultiPing).toBe(false);
+    expect(
+      normalizeThemeSettings({
+        enableHomepageMultiPing: true,
+        homepageMultiPingTaskIds: [3, 1],
+      }).enableHomepageMultiPing,
+    ).toBe(true);
+
+    const resolved = normalizeThemeSettings({
+      enableHomepageMultiPing: true,
+      homepageMultiPingTaskIds: [3, 1, 3, 2, 4],
+    });
+    expect(resolved.enableHomepageMultiPing).toBe(true);
+    expect(resolved.homepageMultiPingTaskIds).toEqual([3, 1, 2]);
+  });
+
   it("defaults home sort to weight ascending and falls back to a field's natural direction", () => {
     const base = normalizeThemeSettings({});
     expect(base.enableHomeSort).toBe(true);

@@ -1,9 +1,28 @@
 export type HomepagePingTaskBindings = Record<string, string[]>;
+export const HOMEPAGE_MULTI_PING_TASK_COUNT = 3;
 
 function parseTaskId(taskId: string) {
   if (!/^\d+$/.test(taskId)) return null;
   const parsed = Number(taskId);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function normalizeHomepageMultiPingTaskIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+
+  const normalized: number[] = [];
+  for (const raw of value) {
+    const taskId =
+      typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0
+        ? raw
+        : typeof raw === "string"
+          ? parseTaskId(raw)
+          : null;
+    if (taskId == null || normalized.includes(taskId)) continue;
+    normalized.push(taskId);
+    if (normalized.length === HOMEPAGE_MULTI_PING_TASK_COUNT) break;
+  }
+  return normalized;
 }
 
 export function normalizeHomepagePingTaskBindings(
@@ -57,4 +76,56 @@ export function invertHomepagePingTaskBindings(
   }
 
   return selectedTaskByClient;
+}
+
+export function resolveHomepagePingTaskIdsByClient(
+  clientUuids: string[],
+  bindings: HomepagePingTaskBindings,
+  multiTaskIds: number[] = [],
+): Map<string, number[]> {
+  const selectedTaskIds = normalizeHomepageMultiPingTaskIds(multiTaskIds);
+  const selectedTaskIdsByClient = new Map<string, number[]>();
+
+  if (selectedTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT) {
+    for (const uuid of clientUuids) {
+      if (uuid) selectedTaskIdsByClient.set(uuid, selectedTaskIds);
+    }
+    return selectedTaskIdsByClient;
+  }
+
+  const singleTaskByClient = invertHomepagePingTaskBindings(bindings);
+  for (const uuid of clientUuids) {
+    const taskId = singleTaskByClient.get(uuid);
+    if (taskId != null) selectedTaskIdsByClient.set(uuid, [taskId]);
+  }
+  return selectedTaskIdsByClient;
+}
+
+export function resolveHomepagePingSelections(
+  clientUuids: string[],
+  bindings: HomepagePingTaskBindings,
+  multiTaskIds: number[] = [],
+) {
+  const normalizedMultiTaskIds =
+    normalizeHomepageMultiPingTaskIds(multiTaskIds);
+  const useMultiPing =
+    normalizedMultiTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT;
+  const singleTaskIdsByClient = useMultiPing
+    ? new Map<string, number[]>()
+    : resolveHomepagePingTaskIdsByClient(clientUuids, bindings);
+  const multiTaskIdsByClient = useMultiPing
+    ? resolveHomepagePingTaskIdsByClient(
+        clientUuids,
+        {},
+        normalizedMultiTaskIds,
+      )
+    : new Map<string, number[]>();
+
+  return {
+    singleTaskIdsByClient,
+    multiTaskIdsByClient,
+    requestedTaskIdsByClient: useMultiPing
+      ? multiTaskIdsByClient
+      : singleTaskIdsByClient,
+  };
 }

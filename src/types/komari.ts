@@ -140,6 +140,8 @@ export interface ThemeSettings {
   enableAdminButton?: boolean;
   showPingChart?: boolean;
   homepagePingBindings?: Record<string, string[]>;
+  enableHomepageMultiPing?: boolean;
+  homepageMultiPingTaskIds?: number[];
   fakePingForUnbound?: boolean;
   showHomeOverview?: boolean;
   showGroupTabs?: boolean;
@@ -390,6 +392,15 @@ export interface PingOverviewItem {
   }>;
   max: number;
   loss: number | null;
+}
+
+export interface HomepagePingLine extends PingOverviewItem {
+  taskId: number;
+  taskName: string;
+}
+
+export interface HomepagePingDisplayLine extends HomepagePingLine {
+  buckets: PingOverviewBucket[];
 }
 
 export interface TrafficTrendSample {

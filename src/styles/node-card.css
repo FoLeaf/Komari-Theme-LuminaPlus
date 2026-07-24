@@ -425,6 +425,97 @@
   gap: 22px;
 }
 
+/* 三网模式沿用单线路“延迟 / 丢包”双图语义：左右按指标分组、每列三行线路，
+   分桶颜色表达真实延迟与丢包状态。 */
+.multi-ping-status {
+  min-width: 0;
+}
+
+.multi-ping-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.multi-ping-metric-column {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.multi-ping-metric-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.multi-ping-metric-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.multi-ping-metric-head.is-value-only {
+  justify-content: flex-end;
+}
+
+.multi-ping-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 640;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-ping-value {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.multi-ping-value small {
+  margin-left: 2px;
+  color: var(--text-tertiary);
+  font-size: 8.5px;
+  font-weight: 540;
+}
+
+.multi-ping-buckets {
+  position: relative;
+  display: block;
+  min-width: 0;
+  height: 11px;
+}
+
+.multi-ping-buckets .health-bar-row {
+  height: 100%;
+}
+
+.multi-ping-status.is-compact {
+  display: block;
+}
+
+.multi-ping-status.is-compact .multi-ping-columns {
+  gap: 14px;
+}
+
+.multi-ping-status.is-compact .multi-ping-metric-column {
+  gap: 6px;
+}
+
+.multi-ping-status.is-compact .multi-ping-buckets {
+  height: 9px;
+}
+
 .server-health-block {
   display: flex;
   flex-direction: column;
@@ -434,23 +525,6 @@
 
 .server-health-chart-wrap {
   position: relative;
-}
-
-.server-health-tooltip {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  z-index: 16;
-  min-width: 140px;
-  max-width: 220px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 86%, black 14%);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-elev) 98%, black 2%);
-  box-shadow:
-    0 20px 40px -22px rgba(0, 0, 0, 0.72),
-    0 8px 18px -14px rgba(0, 0, 0, 0.5);
-  padding: 9px 10px;
-  backdrop-filter: blur(14px);
 }
 
 .server-health-value,

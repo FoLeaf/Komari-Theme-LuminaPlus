@@ -31,6 +31,11 @@ export interface HomeNodeSummary {
   netDown: number;
 }
 
+export interface NodeOnlineSummary {
+  uuid: string;
+  online: boolean | null;
+}
+
 interface TrafficTrendSeries {
   buffer: TrafficTrendSample[];
   start: number;
@@ -345,6 +350,7 @@ let state: State = emptyState();
 const visibleNodeListeners = new Set<Listener>();
 const allNodesListeners = new Set<Listener>();
 const homeNodeSummaryListeners = new Set<Listener>();
+const nodeOnlineSummaryListeners = new Set<Listener>();
 const storeStatusListeners = new Set<Listener>();
 const nodeMetaListeners = new Map<string, Set<Listener>>();
 const nodeMetricsListeners = new Map<string, Set<Listener>>();
@@ -358,6 +364,9 @@ let allNodeMetaSnapshot: NodeInfo[] = [];
 let allNodeMetaSnapshotVersion = -1;
 let homeNodeSummariesSnapshot: HomeNodeSummary[] = [];
 let homeNodeSummariesSnapshotVersion = -1;
+let nodeOnlineSummariesSnapshot: NodeOnlineSummary[] = [];
+let nodeOnlineSummariesSnapshotVersion = -1;
+let nodeOnlineSummariesVersion = 0;
 let storeStatusSnapshot: StoreStatusSnapshot = {
   failureStreak: 0,
   hydrated: false,
@@ -397,6 +406,16 @@ function hasAny(items: Iterable<string> | undefined): boolean {
 }
 
 function commit(next: State, touches: CommitTouches = {}) {
+  const previous = state;
+  const onlineTouched =
+    Boolean(touches.nodeList) ||
+    (touches.metrics
+      ? Array.from(touches.metrics).some(
+          (uuid) =>
+            (previous.metricsByUuid[uuid]?.online ?? null) !==
+            (next.metricsByUuid[uuid]?.online ?? null),
+        )
+      : false);
   state = next;
   // 派生快照以 storeVersion 作缓存键。
   storeVersion += 1;
@@ -409,6 +428,10 @@ function commit(next: State, touches: CommitTouches = {}) {
   if (touches.nodeList) emitListeners(visibleNodeListeners);
   if (touches.allNodes) emitListeners(allNodesListeners);
   if (homeTouched) emitListeners(homeNodeSummaryListeners);
+  if (onlineTouched) {
+    nodeOnlineSummariesVersion += 1;
+    emitListeners(nodeOnlineSummaryListeners);
+  }
   if (touches.storeStatus) emitListeners(storeStatusListeners);
   if (touches.meta) {
     emitMappedListeners(nodeMetaListeners, touches.meta);
@@ -910,6 +933,10 @@ export function subscribeHomeNodeSummaries(listener: Listener): () => void {
   return subscribeSet(homeNodeSummaryListeners, listener);
 }
 
+export function subscribeNodeOnlineSummaries(listener: Listener): () => void {
+  return subscribeSet(nodeOnlineSummaryListeners, listener);
+}
+
 export function subscribeStoreStatus(listener: Listener): () => void {
   return subscribeSet(storeStatusListeners, listener);
 }
@@ -1078,6 +1105,36 @@ export function getHomeNodeSummariesSnapshot(): HomeNodeSummary[] {
   homeNodeSummariesSnapshot = next;
   homeNodeSummariesSnapshotVersion = storeVersion;
   return homeNodeSummariesSnapshot;
+}
+
+export function getNodeOnlineSummariesSnapshot(): NodeOnlineSummary[] {
+  if (nodeOnlineSummariesSnapshotVersion === nodeOnlineSummariesVersion) {
+    return nodeOnlineSummariesSnapshot;
+  }
+
+  const next = state.order
+    .filter((uuid) => Boolean(state.metaByUuid[uuid]))
+    .map((uuid) => ({
+      uuid,
+      online: state.metricsByUuid[uuid]?.online ?? null,
+    }));
+
+  if (
+    !(
+      next.length === nodeOnlineSummariesSnapshot.length &&
+      next.every((item, index) => {
+        const previous = nodeOnlineSummariesSnapshot[index];
+        return (
+          previous?.uuid === item.uuid &&
+          previous.online === item.online
+        );
+      })
+    )
+  ) {
+    nodeOnlineSummariesSnapshot = next;
+  }
+  nodeOnlineSummariesSnapshotVersion = nodeOnlineSummariesVersion;
+  return nodeOnlineSummariesSnapshot;
 }
 
 if (import.meta.hot) {

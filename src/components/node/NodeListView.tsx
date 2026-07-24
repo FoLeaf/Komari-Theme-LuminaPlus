@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp, CircleDollarSign } from "lucide-react";
 import { clsx } from "clsx";
@@ -11,7 +11,9 @@ import { formatBytes } from "@/utils/format";
 import { speedRateColor } from "@/utils/metricTone";
 import { CanvasStrip, fillRoundedRect, safeCanvasColor } from "./CanvasStrip";
 import { LatencyBars } from "./LatencyBars";
+import { HealthBucketTooltip } from "./HealthBucketTooltip";
 import { formatOsLabel, joinTagTitle, nodeDetailLinkLabels } from "./nodeCardShared";
+import { formatHealthBucketTooltip } from "./pingBucketText";
 
 const GAUGE_SEGMENTS = 14;
 // 列表网络列的延迟柱数:比卡片(24)少,配窄列宽,柱子仍清晰可读。
@@ -111,13 +113,28 @@ function ListLatency({
   max: number;
   redrawKey: string;
 }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const hoveredBucket = hoveredIndex == null ? null : (buckets[hoveredIndex] ?? null);
+  const tooltip = hoveredBucket
+    ? formatHealthBucketTooltip(hoveredBucket, "latency")
+    : null;
+
   return (
     <div className="node-list-latency">
       <span className="node-list-latency-value tabular" style={{ color: latencyColor }}>
         {latency != null ? Math.round(latency) : "—"}
         {latency != null && <small>ms</small>}
       </span>
-      <LatencyBars buckets={buckets} max={max} redrawKey={redrawKey} height={14} />
+      <span className="node-list-latency-bars">
+        <LatencyBars
+          buckets={buckets}
+          max={max}
+          redrawKey={redrawKey}
+          height={14}
+          onHoverIndex={setHoveredIndex}
+        />
+        <HealthBucketTooltip text={tooltip} index={hoveredIndex} count={buckets.length} />
+      </span>
     </div>
   );
 }
@@ -126,7 +143,9 @@ const NodeRow = memo(function NodeRow({ uuid }: { uuid: string }) {
   const { resolvedAppearance } = usePreferences();
   const colorsVersion = useMetricColorsVersion();
   const redrawKey = `${resolvedAppearance}:${colorsVersion}`;
-  const model = useNodeCardModel(uuid, LIST_PING_BUCKETS);
+  const model = useNodeCardModel(uuid, {
+    pingBucketCount: LIST_PING_BUCKETS,
+  });
 
   if (!model.node) {
     return <div className="node-list-row is-loading" aria-busy />;

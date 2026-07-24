@@ -2,8 +2,14 @@ import { useMemo } from "react";
 import { useFakePingFallback } from "@/hooks/useFakePing";
 import { useHourlyClock } from "@/hooks/useClock";
 import { useNodeCardSnapshots } from "@/hooks/useNode";
-import { useNodePingOverview, usePingBuckets } from "@/hooks/usePingOverview";
+import {
+  buildPingBuckets,
+  useNodePingOverview,
+  useNodePingOverviewLines,
+  usePingBuckets,
+} from "@/hooks/usePingOverview";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
+import type { HomepagePingDisplayLine, HomepagePingLine } from "@/types/komari";
 import { formatRenewalPrice } from "@/utils/billing";
 import { getExpireTextColor } from "@/utils/expireStatus";
 import {
@@ -21,20 +27,79 @@ import {
 } from "@/utils/metricTone";
 import { resolveTrafficUsage, trafficTypeLabel, type TrafficDisplay } from "@/utils/traffic";
 import { resolveOsInfo } from "@/components/ui/OsLogo";
+import { HOMEPAGE_MULTI_PING_TASK_COUNT } from "@/utils/pingTasks";
 
-export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
+interface NodeCardModelOptions {
+  pingBucketCount?: number;
+  includeMultiPing?: boolean;
+}
+
+export function useNodeCardModel(
+  uuid: string,
+  {
+    pingBucketCount,
+    includeMultiPing = false,
+  }: NodeCardModelOptions = {},
+) {
   const { meta, metrics, trafficTrend } = useNodeCardSnapshots(uuid);
-  const realPing = useNodePingOverview(uuid);
-  const { showCardGroup, fakePingForUnbound, homepagePingBindings } = useThemeSettings();
+  const {
+    showCardGroup,
+    fakePingForUnbound,
+    homepagePingBindings,
+    enableHomepageMultiPing,
+    homepageMultiPingTaskIds,
+  } = useThemeSettings();
+  const multiPingActive =
+    includeMultiPing &&
+    enableHomepageMultiPing &&
+    homepageMultiPingTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT;
+  const realPing = useNodePingOverview(uuid, !multiPingActive);
+  const realPingLines = useNodePingOverviewLines(uuid, multiPingActive);
   const now = useHourlyClock();
   const ping = useFakePingFallback(
     uuid,
     realPing,
     metrics?.online === true,
-    fakePingForUnbound,
+    fakePingForUnbound && !multiPingActive,
     homepagePingBindings,
   );
-  const pingBuckets = usePingBuckets(ping, pingBucketCount);
+  const pingBuckets = usePingBuckets(
+    ping,
+    pingBucketCount,
+    !multiPingActive,
+  );
+  const homepagePingLines = useMemo<HomepagePingDisplayLine[]>(() => {
+    if (
+      !multiPingActive
+    ) {
+      return [];
+    }
+    const bucketNow = Date.now();
+    return homepageMultiPingTaskIds.map((taskId) => {
+      const loaded = realPingLines.find((line) => line.taskId === taskId);
+      const line: HomepagePingLine =
+        loaded ?? {
+          taskId,
+          taskName: `任务 #${taskId}`,
+          client: uuid,
+          isAssigned: true,
+          lastValue: null,
+          samples: [],
+          max: 1,
+          loss: null,
+        };
+      return {
+        ...line,
+        buckets: buildPingBuckets(line, pingBucketCount, bucketNow),
+      };
+    });
+  }, [
+    homepageMultiPingTaskIds,
+    multiPingActive,
+    pingBucketCount,
+    realPingLines,
+    uuid,
+  ]);
 
   const metaModel = useMemo(() => {
     if (!meta) return null;
@@ -83,6 +148,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
         trafficTrend,
         ping,
         pingBuckets,
+        homepagePingLines,
       };
     }
 
@@ -116,6 +182,7 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       trafficTrend,
       ping,
       pingBuckets,
+      homepagePingLines,
       traffic,
       ...metaModel,
       ...pingModel,
@@ -126,5 +193,14 @@ export function useNodeCardModel(uuid: string, pingBucketCount?: number) {
       isOnline: metrics.online === true,
       isOffline: metrics.online === false,
     };
-  }, [meta, metrics, metaModel, pingModel, ping, pingBuckets, trafficTrend]);
+  }, [
+    homepagePingLines,
+    meta,
+    metrics,
+    metaModel,
+    pingModel,
+    ping,
+    pingBuckets,
+    trafficTrend,
+  ]);
 }

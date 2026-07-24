@@ -539,10 +539,11 @@
   overflow: visible;
 }
 
-.compact-node-health-tooltip {
+.compact-node-health-tooltip,
+.node-health-hover-tooltip {
   position: absolute;
   bottom: calc(100% + 7px);
-  left: var(--compact-health-tooltip-x, 50%);
+  left: var(--node-health-tooltip-x, var(--compact-health-tooltip-x, 50%));
   z-index: 2;
   width: max-content;
   max-width: 156px;
@@ -560,7 +561,8 @@
   animation: compact-health-tooltip-in 150ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.compact-node-health-tooltip::after {
+.compact-node-health-tooltip::after,
+.node-health-hover-tooltip::after {
   content: "";
   position: absolute;
   top: 100%;
@@ -612,7 +614,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .compact-node-health-tooltip {
+  .compact-node-health-tooltip,
+  .node-health-hover-tooltip {
     animation: none;
   }
 

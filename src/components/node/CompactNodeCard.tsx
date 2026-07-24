@@ -28,6 +28,7 @@ import {
   speedRateColorFromBytes,
 } from "@/utils/metricTone";
 import { formatHealthBucketTooltip } from "./pingBucketText";
+import { MultiPingStatus } from "./MultiPingStatus";
 import {
   formatCompactExpire,
   formatCompactPercent,
@@ -660,7 +661,10 @@ export const CompactNodeCard = memo(function CompactNodeCard({
 }: {
   uuid: string;
 }) {
-  const model = useNodeCardModel(uuid, HEALTH_BAR_COUNT);
+  const model = useNodeCardModel(uuid, {
+    pingBucketCount: HEALTH_BAR_COUNT,
+    includeMultiPing: true,
+  });
   const themeSettings = useThemeSettings();
 
   if (!model.node) {
@@ -673,6 +677,7 @@ export const CompactNodeCard = memo(function CompactNodeCard({
     trafficTrend,
     ping,
     pingBuckets,
+    homepagePingLines,
     compactFooterTags: footerTags,
     subtitle,
     renewalPrice,
@@ -712,13 +717,21 @@ export const CompactNodeCard = memo(function CompactNodeCard({
         renewalPrice={renewalPrice}
       />
       <CompactTrafficBar traffic={traffic} uptimeLabel={uptimeLabel} />
-      <CompactNodeHealth
-        ping={ping}
-        pingBuckets={pingBuckets}
-        latencyColor={latencyColor}
-        lossColor={lossColor}
-        hasHomepagePingBinding={hasHomepagePingBinding}
-      />
+      {homepagePingLines.length === 3 ? (
+        <MultiPingStatus
+          lines={homepagePingLines}
+          density="compact"
+          className="compact-node-bottom"
+        />
+      ) : (
+        <CompactNodeHealth
+          ping={ping}
+          pingBuckets={pingBuckets}
+          latencyColor={latencyColor}
+          lossColor={lossColor}
+          hasHomepagePingBinding={hasHomepagePingBinding}
+        />
+      )}
     </article>
   );
 });

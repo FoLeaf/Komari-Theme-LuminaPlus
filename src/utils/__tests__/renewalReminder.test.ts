@@ -54,6 +54,37 @@ describe("renewal reminders", () => {
     });
   });
 
+  it("keeps expired reminders only for nodes confirmed online", () => {
+    const reminders = getRenewalReminders(
+      [
+        node({ uuid: "offline-expired", expired_at: inDays(-2), online: false }),
+        node({ uuid: "online-expired", expired_at: inDays(-2), online: true }),
+        node({ uuid: "unknown-expired", expired_at: inDays(-2), online: null }),
+        node({ uuid: "offline-soon", expired_at: inDays(3), online: false }),
+      ],
+      NOW,
+      { requireOnlineForExpired: true },
+    );
+    const reminderByUuid = new Map(reminders.map((item) => [item.uuid, item]));
+
+    expect(reminderByUuid.has("offline-expired")).toBe(false);
+    expect(reminderByUuid.get("online-expired")?.statusLabel).toBe("已过期");
+    expect(reminderByUuid.has("unknown-expired")).toBe(false);
+    expect(reminderByUuid.get("offline-soon")?.statusLabel).toBe("即将到期");
+  });
+
+  it("keeps expired entries in the asset risk view without the online gate", () => {
+    const reminders = getRenewalReminders(
+      [
+        node({ uuid: "offline-expired", expired_at: inDays(-2), online: false }),
+        node({ uuid: "unknown-expired", expired_at: inDays(-2), online: null }),
+      ],
+      NOW,
+    );
+
+    expect(reminders.map((item) => item.uuid)).toEqual(["offline-expired", "unknown-expired"]);
+  });
+
   it("snoozes reminders for exactly one day", () => {
     expect(RENEWAL_SNOOZE_MS).toBe(DAY_MS);
   });

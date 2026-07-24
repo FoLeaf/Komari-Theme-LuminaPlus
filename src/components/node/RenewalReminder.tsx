@@ -1,7 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { CircleDollarSign, X } from "lucide-react";
-import type { NodeInfo } from "@/types/komari";
 import {
   EMPTY_RENEWAL_REMINDER_PREFERENCES,
   formatRenewalReminderExpiry,
@@ -11,6 +10,7 @@ import {
   RENEWAL_SNOOZE_MS,
   RENEWAL_WARNING_DAYS,
   type RenewalReminderPreferences,
+  type RenewalReminderSource,
 } from "@/utils/renewalReminder";
 
 const STORAGE_KEY = "lumina-renewal-reminders-v1";
@@ -60,7 +60,7 @@ function AssetLink() {
   );
 }
 
-export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
+export function RenewalReminder({ nodes }: { nodes: RenewalReminderSource[] }) {
   const [open, setOpen] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [preferences, setPreferences] = useState(readPreferences);
@@ -69,7 +69,10 @@ export function RenewalReminder({ nodes }: { nodes: NodeInfo[] }) {
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
   const titleId = useId();
-  const reminders = useMemo(() => getRenewalReminders(nodes, clock), [clock, nodes]);
+  const reminders = useMemo(
+    () => getRenewalReminders(nodes, clock, { requireOnlineForExpired: true }),
+    [clock, nodes],
+  );
   const visibleReminders = useMemo(
     () => getVisibleRenewalReminders(reminders, preferences, clock),
     [clock, preferences, reminders],

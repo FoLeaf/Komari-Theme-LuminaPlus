@@ -20,7 +20,6 @@ export function LatencyBars({ buckets, max, redrawKey, height = 16, onHoverIndex
       return buckets.map((bucket) => ({
         value: bucket.value ?? 0,
         has: bucket.value != null,
-        index: bucket.index,
         tone: safeCanvasColor(latencyHeatColor(bucket.value)),
       }));
     },
@@ -30,7 +29,7 @@ export function LatencyBars({ buckets, max, redrawKey, height = 16, onHoverIndex
   const getHoverIndex = useCallback(
     (offsetX: number, width: number) => {
       const slot = getBarSlot(offsetX, width, bars.length);
-      return slot == null ? null : bars[slot]?.index ?? null;
+      return slot == null ? null : slot;
     },
     [bars],
   );

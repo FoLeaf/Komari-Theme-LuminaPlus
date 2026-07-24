@@ -18,7 +18,9 @@ export type RenewalReminderSource = Pick<
   | "billing_cycle"
   | "auto_renewal"
   | "expired_at"
->;
+> & {
+  online?: boolean | null;
+};
 
 interface RenewalReminderItem {
   uuid: string;
@@ -37,6 +39,10 @@ export interface RenewalReminderPreferences {
   snoozedUntil: Record<string, number>;
 }
 
+export interface RenewalReminderOptions {
+  requireOnlineForExpired?: boolean;
+}
+
 export const EMPTY_RENEWAL_REMINDER_PREFERENCES: RenewalReminderPreferences = {
   dismissedCycles: [],
   snoozedUntil: {},
@@ -50,6 +56,7 @@ export function renewalCycleKey(node: RenewalReminderSource, expiresAt?: number)
 export function getRenewalReminders(
   nodes: RenewalReminderSource[],
   now = Date.now(),
+  options: RenewalReminderOptions = {},
 ): RenewalReminderItem[] {
   const reminders: RenewalReminderItem[] = [];
 
@@ -63,6 +70,9 @@ export function getRenewalReminders(
     if (daysRemaining > RENEWAL_WARNING_DAYS) continue;
 
     const expired = daysRemaining < 0;
+    // 首页可要求过期节点必须明确在线：状态尚未返回（null/undefined）时先不展示，
+    // 避免刷新时红点短暂出现；资产风险视图不启用此门槛，继续展示真实到期数据。
+    if (expired && options.requireOnlineForExpired && node.online !== true) continue;
     const critical = daysRemaining <= 3;
     reminders.push({
       uuid: node.uuid,

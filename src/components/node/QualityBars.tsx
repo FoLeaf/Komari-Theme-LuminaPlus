@@ -9,10 +9,16 @@ const ACTIVE_BAR_HEIGHT = 0.84;
 interface QualityBarsProps {
   buckets: PingOverviewBucket[];
   redrawKey?: string;
+  height?: number;
   onHoverIndex?: (index: number | null) => void;
 }
 
-export function QualityBars({ buckets, redrawKey, onHoverIndex }: QualityBarsProps) {
+export function QualityBars({
+  buckets,
+  redrawKey,
+  height = 16,
+  onHoverIndex,
+}: QualityBarsProps) {
   const bars = useMemo(
     () => {
       // CSS 色变化时需要重新解析预计算的 canvas 色值。
@@ -22,7 +28,6 @@ export function QualityBars({ buckets, redrawKey, onHoverIndex }: QualityBarsPro
           bucket.loss != null && Number.isFinite(bucket.loss) && bucket.total > 0;
         return {
           active: hasBucketValue,
-          index: bucket.index,
           tone: safeCanvasColor(hasBucketValue ? lossHeatColor(bucket.loss) : "var(--progress-bg)"),
         };
       });
@@ -33,7 +38,7 @@ export function QualityBars({ buckets, redrawKey, onHoverIndex }: QualityBarsPro
   const getHoverIndex = useCallback(
     (offsetX: number, width: number) => {
       const slot = getBarSlot(offsetX, width, bars.length);
-      return slot == null ? null : bars[slot]?.index ?? null;
+      return slot == null ? null : slot;
     },
     [bars],
   );
@@ -60,7 +65,7 @@ export function QualityBars({ buckets, redrawKey, onHoverIndex }: QualityBarsPro
   return (
     <CanvasStrip
       className="health-bar-row"
-      height={16}
+      height={height}
       redrawKey={redrawKey}
       getHoverIndex={getHoverIndex}
       onHoverIndex={onHoverIndex}

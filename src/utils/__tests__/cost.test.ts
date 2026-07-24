@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   calculateCostPremiumAmount,
+  calculateCostPremiumBasisAt,
   calculateCostSummary,
   formatCnyMoney,
   getExchangeRates,
@@ -366,6 +367,50 @@ describe("cost helpers", () => {
     expect(
       calculateCostPremiumAmount(140, 20, { amount: 30, paidCny: 130 }),
     ).toBe(40);
+  });
+
+  it("backdates the one-time premium basis to the acquisition date", () => {
+    const now = new Date(2026, 6, 15, 12).getTime();
+    const acquiredAt = "2026-05-15";
+    const acquired = calculateCostPremiumBasisAt(
+      [
+        node({
+          uuid: "acquired",
+          price: 30,
+          currency: "CNY",
+          billing_cycle: 30,
+          expired_at: new Date(2026, 8, 15, 12).toISOString(),
+        }),
+      ],
+      [],
+      RATES,
+      "acquired",
+      acquiredAt,
+      now,
+    );
+    const current = calculateCostPremiumBasisAt(
+      [
+        node({
+          uuid: "acquired",
+          price: 30,
+          currency: "CNY",
+          billing_cycle: 30,
+          expired_at: new Date(2026, 8, 15, 12).toISOString(),
+        }),
+      ],
+      [],
+      RATES,
+      "acquired",
+      undefined,
+      now,
+    );
+
+    expect(acquired).not.toBeNull();
+    expect(current).not.toBeNull();
+    expect(acquired!).toBeGreaterThan(current!);
+    expect(calculateCostPremiumAmount(300, acquired!)).toBeLessThan(
+      calculateCostPremiumAmount(300, current!),
+    );
   });
 
   it("normalizeCostPremiums keeps valid acquiredAt and drops unparseable dates without dropping the entry", () => {

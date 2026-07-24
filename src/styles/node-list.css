@@ -275,6 +275,12 @@
   height: 14px;
 }
 
+.node-list-latency-bars {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
 /* 流量列:↑↓ 两行在左,配额% 钉在两行后面、竖直居中。 */
 .col-traffic {
   display: flex;

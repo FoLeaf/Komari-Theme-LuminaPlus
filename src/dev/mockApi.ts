@@ -323,14 +323,14 @@ function trafficMetricPayload(params: {
   };
 }
 
-function pingRecords(uuid?: string) {
+function pingRecords(uuid?: string, taskId = 1) {
   const clients = uuid ? [uuid] : nodes.map((node) => node.uuid);
   const now = Date.now();
   return clients.flatMap((client) => {
     const index = nodes.findIndex((node) => node.uuid === client);
-    const baseline = statusProfiles[Math.max(0, index)][4];
+    const baseline = statusProfiles[Math.max(0, index)][4] + (taskId - 1) * 18;
     return Array.from({ length: 60 }, (_, sample) => ({
-      task_id: 1,
+      task_id: taskId,
       time: now - (59 - sample) * 60_000,
       value:
         index === 2 && sample % 17 === 0
@@ -341,16 +341,18 @@ function pingRecords(uuid?: string) {
   });
 }
 
-const pingTask = {
-  id: 1,
+const pingTasks = [
+  { id: 1, name: "中国电信", target: "电信探针" },
+  { id: 2, name: "中国联通", target: "联通探针" },
+  { id: 3, name: "中国移动", target: "移动探针" },
+].map((task, index) => ({
+  ...task,
   interval: 60,
-  name: "全球 ICMP",
   loss: 0,
   clients: nodes.map((node) => node.uuid),
   type: "icmp",
-  target: "1.1.1.1",
-  weight: 1,
-};
+  weight: index + 1,
+}));
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -413,7 +415,11 @@ export function installDevMockApi() {
           showBandwidthRating: true,
           showAssetRating: true,
           showPingChart: true,
-          homepagePingBindings: { "1": nodes.map((node) => node.uuid) },
+          // 单任务刻意和三网首项不同，便于回归验证列表没有误读全局三网数据。
+          homepagePingBindings: { "2": nodes.map((node) => node.uuid) },
+          enableHomepageMultiPing:
+            new URLSearchParams(window.location.search).get("multiPing") === "1",
+          homepageMultiPingTaskIds: [1, 2, 3],
         },
       });
     }
@@ -429,6 +435,7 @@ export function installDevMockApi() {
         params?: {
           uuid?: string;
           type?: string;
+          task_id?: number;
           metric_keys?: string[];
           entity_ids?: string[];
           start?: string;
@@ -457,7 +464,7 @@ export function installDevMockApi() {
         });
       }
       if (payload.method === "public:getPublicPingTasks") {
-        result = [pingTask];
+        result = pingTasks;
       } else if (payload.method === "common:getNodes") {
         result = Object.fromEntries(nodes.map((node) => [node.uuid, node]));
       } else if (payload.method === "common:getNodesLatestStatus") {
@@ -465,9 +472,9 @@ export function installDevMockApi() {
       } else if (payload.method === "common:getRecords") {
         const isPing = payload.params?.type === "ping";
         const records = isPing
-          ? pingRecords(payload.params?.uuid)
+          ? pingRecords(payload.params?.uuid, payload.params?.task_id)
           : loadRecords(payload.params?.uuid ?? nodes[0].uuid);
-        result = { count: records.length, records, tasks: isPing ? [pingTask] : [] };
+        result = { count: records.length, records, tasks: isPing ? pingTasks : [] };
       }
       return json({ jsonrpc: "2.0", id: payload.id, result });
     }

@@ -182,8 +182,8 @@ export function normalizeCostPremiums(value: unknown): Record<string, CostPremiu
 }
 
 /**
- * 首次录入按当前剩余价值计算溢价；之后修改收购价时沿用已固化的原始折算基准，
- * 避免续费、汇率或收购日期变化悄悄改写历史溢价。
+ * 首次录入由调用方传入收购日剩余价值计算溢价；之后仅修改收购价时沿用已固化基准。
+ * 若用户主动修改收购日期，调用方应传入新日期的基准且不传 current，以重新固化。
  */
 export function calculateCostPremiumAmount(
   paidCny: number,
@@ -579,6 +579,35 @@ export function calculateCostSummary(
       (a, b) => a.weight - b.weight || a.name.localeCompare(b.name, "zh-CN"),
     ),
   };
+}
+
+/**
+ * 使用当前价格、账单周期、到期日和汇率，把剩余价值的计算时点回拨到收购日。
+ * 返回值只用于首次计算或主动修改收购日期时固化溢价，不会随之后的汇率/续费变化自动更新。
+ */
+export function calculateCostPremiumBasisAt(
+  nodes: NodeInfo[],
+  ignoredNodes: string[],
+  rates: Record<string, number>,
+  uuid: string,
+  acquiredAt?: string,
+  now = Date.now(),
+) {
+  const atMs = acquiredAt ? parseAcquiredTimestamp(acquiredAt) : now;
+  if (atMs == null || atMs > now) return null;
+
+  const node = nodes.find((item) => item.uuid === uuid);
+  if (!node) return null;
+  const detail = calculateCostSummary(
+    [node],
+    ignoredNodes,
+    rates,
+    {},
+    atMs,
+  ).details[0];
+  if (!detail) return null;
+  if (detail.note === "免费") return 0;
+  return detail.counted ? detail.remainingCny : null;
 }
 
 const CNY_MONEY_FORMATTER = new Intl.NumberFormat("zh-CN", {

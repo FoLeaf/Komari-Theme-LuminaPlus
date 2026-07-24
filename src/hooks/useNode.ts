@@ -6,8 +6,10 @@ import {
   getNodeMetaSnapshot,
   getNodeMetricsSnapshot,
   getNodeTrafficTrendSnapshot,
+  getNodeOnlineSummariesSnapshot,
   getVisibleNodeUuidsSnapshot,
   subscribeHomeNodeSummaries,
+  subscribeNodeOnlineSummaries,
   subscribeAllNodes,
   subscribeStoreStatus,
   subscribeVisibleNodeUuids,
@@ -16,6 +18,7 @@ import {
   subscribeToNodeTrafficTrend,
   getStoreStatusSnapshot,
   type HomeNodeSummary,
+  type NodeOnlineSummary,
 } from "@/services/wsStore";
 import type { NodeInfo, NodeMetrics, TrafficTrendSample } from "@/types/komari";
 
@@ -114,6 +117,15 @@ export function useHomeNodeSummaries(): HomeNodeSummary[] {
     subscribeHomeNodeSummaries,
     getHomeNodeSummariesSnapshot,
     getHomeNodeSummariesSnapshot,
+  );
+}
+
+export function useNodeOnlineSummaries(): NodeOnlineSummary[] {
+  useEnsured();
+  return useSyncExternalStore(
+    subscribeNodeOnlineSummaries,
+    getNodeOnlineSummariesSnapshot,
+    getNodeOnlineSummariesSnapshot,
   );
 }
 

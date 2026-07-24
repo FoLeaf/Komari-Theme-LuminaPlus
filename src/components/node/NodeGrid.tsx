@@ -4,7 +4,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
 import { Flag } from "@/components/ui/Flag";
 import { useAuth } from "@/hooks/useAuth";
-import { useAllNodeMeta, useHomeNodeSummaries, useNodeStoreStatus } from "@/hooks/useNode";
+import {
+  useAllNodeMeta,
+  useHomeNodeSummaries,
+  useNodeOnlineSummaries,
+  useNodeStoreStatus,
+} from "@/hooks/useNode";
 import { useHomepagePingOverview } from "@/hooks/usePingOverview";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
@@ -43,7 +48,7 @@ import { NodeCard } from "./NodeCard";
 import { NodeListView } from "./NodeListView";
 import { RenewalReminder } from "./RenewalReminder";
 import type { NodeViewMode } from "@/utils/themeSettings";
-import type { NodeInfo } from "@/types/komari";
+import type { RenewalReminderSource } from "@/utils/renewalReminder";
 
 // 卡片视图网格密度；列表档由独立组件布局。
 const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: number }> = {
@@ -134,7 +139,7 @@ function HomeOverviewCards({
   bandwidthRatingLabels: string;
   assetRatingLabels: string;
   showDetailButton: boolean;
-  renewalNodes: NodeInfo[];
+  renewalNodes: RenewalReminderSource[];
   onWarmTraffic: () => void;
 }) {
   const [trafficValue, trafficUnit] = formatBytes(
@@ -360,6 +365,7 @@ export function NodeGrid() {
   const now = useHourlyClock();
   const queryClient = useQueryClient();
   const nodes = useHomeNodeSummaries();
+  const nodeOnlineSummaries = useNodeOnlineSummaries();
   const allMeta = useAllNodeMeta();
   const { hydrated: storeHydrated, nodeInfoError } = useNodeStoreStatus();
   const { data: me } = useAuth();
@@ -374,7 +380,7 @@ export function NodeGrid() {
   const sortDirection = sortEnabled ? sort.direction : themeSettings.homeSortDirection;
   const [selectedGroup, setSelectedGroup] = useState(HOME_ALL_GROUP);
   const [selectedRegion, setSelectedRegion] = useState(HOME_ALL_REGION);
-  useHomepagePingOverview();
+  useHomepagePingOverview(mode);
 
   // 摘要不含名称，先从完整 meta 解析主题隐藏列表，再统一过滤各类数据。
   const hiddenUuids = useMemo(
@@ -396,6 +402,15 @@ export function NodeGrid() {
       ),
     [allMeta, me?.logged_in, hiddenUuids],
   );
+  const renewalNodes = useMemo<RenewalReminderSource[]>(() => {
+    const onlineByUuid = new Map(
+      nodeOnlineSummaries.map((node) => [node.uuid, node.online]),
+    );
+    return visibleMeta.map((node) => ({
+      ...node,
+      online: onlineByUuid.get(node.uuid) ?? null,
+    }));
+  }, [nodeOnlineSummaries, visibleMeta]);
   const trafficUuids = useMemo(
     () => visibleMeta.map((node) => node.uuid),
     [visibleMeta],
@@ -654,7 +669,7 @@ export function NodeGrid() {
           overview={overview}
           dense={mode === "mini" || mode === "list"}
           showDetailButton={showCostDetailButton}
-          renewalNodes={visibleMeta}
+          renewalNodes={renewalNodes}
           costSummary={costSummary}
           costLoading={costLoading}
           showOverviewRatings={themeSettings.showOverviewRatings}

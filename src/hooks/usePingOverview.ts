@@ -4,6 +4,7 @@ import { useAllNodeMeta, useVisibleNodeUuids } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import { getPingOverview } from "@/services/api";
 import type {
+  HomepagePingLine,
   PingOverviewBucket,
   PingOverviewItem,
   PingRecord,
@@ -13,9 +14,11 @@ import { withTimeoutSignal } from "@/utils/abort";
 import { collectMatchingNodeUuids } from "@/utils/nodeIdentity";
 import { resolvePingSampleCounts } from "@/utils/pingMetrics";
 import {
-  invertHomepagePingTaskBindings,
+  HOMEPAGE_MULTI_PING_TASK_COUNT,
+  resolveHomepagePingSelections,
   type HomepagePingTaskBindings,
 } from "@/utils/pingTasks";
+import type { NodeViewMode } from "@/utils/themeSettings";
 
 const DEFAULT_PING_REFRESH_INTERVAL = 60_000;
 const MIN_PING_REFRESH_INTERVAL = 10_000;
@@ -32,11 +35,30 @@ const EMPTY_PING: PingOverviewItem = {
   max: 1,
   loss: null,
 };
+const EMPTY_PING_LINES: HomepagePingLine[] = [];
+const EMPTY_PING_BUCKETS: PingOverviewBucket[] = [];
+const EMPTY_TASK_IDS: number[] = [];
+const EMPTY_BINDINGS: HomepagePingTaskBindings = {};
+
+export type HomepagePingRequestMode = "single" | "multi";
+
+export function resolveHomepagePingRequestMode(
+  viewMode: NodeViewMode,
+  multiPingEnabled: boolean,
+  multiTaskIds: number[],
+): HomepagePingRequestMode {
+  return (viewMode === "large" || viewMode === "compact") &&
+    multiPingEnabled &&
+    multiTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT
+    ? "multi"
+    : "single";
+}
 
 interface PingOverviewMapResult {
   assignmentKey: string;
   intervalMs: number;
-  items: Map<string, PingOverviewItem>;
+  singleItems: Map<string, PingOverviewItem>;
+  multiLines: Map<string, HomepagePingLine[]>;
 }
 
 type Listener = () => void;
@@ -104,6 +126,14 @@ function equalPingItem(a: PingOverviewItem | undefined, b: PingOverviewItem | un
     a.max === b.max &&
     a.loss === b.loss &&
     equalSamples(a.samples, b.samples)
+  );
+}
+
+function equalPingLine(a: HomepagePingLine | undefined, b: HomepagePingLine | undefined) {
+  return (
+    a?.taskId === b?.taskId &&
+    a?.taskName === b?.taskName &&
+    equalPingItem(a, b)
   );
 }
 
@@ -190,27 +220,10 @@ export function buildPingOverviewItems(
   return result;
 }
 
-function resolveSelectedTasks(
-  clientUuids: string[],
-  bindings: HomepagePingTaskBindings,
-) {
-  const selectedTaskByClient = new Map<string, number>();
-  const bindingSelection = invertHomepagePingTaskBindings(bindings);
-
-  for (const uuid of clientUuids) {
-    const taskId = bindingSelection.get(uuid);
-    if (taskId != null) {
-      selectedTaskByClient.set(uuid, taskId);
-    }
-  }
-
-  return selectedTaskByClient;
-}
-
-function buildAssignmentKey(selectedTaskByClient: Map<string, number>) {
-  return Array.from(selectedTaskByClient.entries())
+function buildAssignmentKey(selectedTaskIdsByClient: Map<string, number[]>) {
+  return Array.from(selectedTaskIdsByClient.entries())
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([uuid, taskId]) => `${uuid}:${taskId}`)
+    .map(([uuid, taskIds]) => `${uuid}:${taskIds.join(",")}`)
     .join("|");
 }
 
@@ -219,7 +232,8 @@ const PING_REQUEST_TIMEOUT_MS = 35_000;
 
 interface PreviousPingOverview {
   assignmentKey: string;
-  items: ReadonlyMap<string, PingOverviewItem>;
+  singleItems: ReadonlyMap<string, PingOverviewItem>;
+  multiLines: ReadonlyMap<string, HomepagePingLine[]>;
 }
 
 function assignedEmptyPing(client: string): PingOverviewItem {
@@ -233,33 +247,60 @@ function assignedEmptyPing(client: string): PingOverviewItem {
   };
 }
 
-async function buildOverviewMap(
+function assignedEmptyLine(
+  client: string,
+  taskId: number,
+  taskName = `任务 #${taskId}`,
+): HomepagePingLine {
+  return {
+    taskId,
+    taskName,
+    ...assignedEmptyPing(client),
+  };
+}
+
+export async function buildPingOverviewMap(
   hours: number,
   clientUuids: string[],
   bindings: HomepagePingTaskBindings,
+  multiTaskIds: number[],
   signal?: AbortSignal,
   previous?: PreviousPingOverview,
+  loadOverview: typeof getPingOverview = getPingOverview,
 ): Promise<PingOverviewMapResult> {
   const normalizedUuids = normalizeVisibleUuids(clientUuids);
   if (normalizedUuids.length === 0) {
     return {
       assignmentKey: "",
       intervalMs: DEFAULT_PING_REFRESH_INTERVAL,
-      items: new Map<string, PingOverviewItem>(),
+      singleItems: new Map<string, PingOverviewItem>(),
+      multiLines: new Map<string, HomepagePingLine[]>(),
     };
   }
 
-  const selectedTaskByClient = resolveSelectedTasks(normalizedUuids, bindings);
-  const selectedTaskIds = Array.from(new Set(selectedTaskByClient.values())).sort(
-    (left, right) => left - right,
+  const {
+    singleTaskIdsByClient,
+    multiTaskIdsByClient,
+    requestedTaskIdsByClient,
+  } = resolveHomepagePingSelections(
+    normalizedUuids,
+    bindings,
+    multiTaskIds,
   );
-  const assignmentKey = buildAssignmentKey(selectedTaskByClient);
+  const selectedTaskIds = Array.from(
+    new Set(Array.from(requestedTaskIdsByClient.values()).flat()),
+  ).sort((left, right) => left - right);
+  const assignmentKey = [
+    `single:${buildAssignmentKey(singleTaskIdsByClient)}`,
+    `multi:${buildAssignmentKey(multiTaskIdsByClient)}`,
+  ].join("|");
 
   if (selectedTaskIds.length === 0) {
     return {
       assignmentKey: "",
       intervalMs: DEFAULT_PING_REFRESH_INTERVAL,
-      items: new Map<string, PingOverviewItem>(),
+      singleItems: new Map<string, PingOverviewItem>(),
+      multiLines: new Map<string, HomepagePingLine[]>(),
     };
   }
 
@@ -268,11 +309,11 @@ async function buildOverviewMap(
       withTimeoutSignal(
         async (requestSignal) => {
           const entityIds = normalizedUuids.filter(
-            (uuid) => selectedTaskByClient.get(uuid) === taskId,
+            (uuid) => requestedTaskIdsByClient.get(uuid)?.includes(taskId),
           );
           return {
             taskId,
-            overview: await getPingOverview(hours, taskId, {
+            overview: await loadOverview(hours, taskId, {
               signal: requestSignal,
               entityIds,
             }),
@@ -285,6 +326,7 @@ async function buildOverviewMap(
   );
 
   const itemsByTask = new Map<number, Map<string, PingOverviewItem>>();
+  const taskNames = new Map<number, string>();
   const successfulTaskIds = new Set<number>();
   const refreshIntervals: number[] = [];
 
@@ -298,6 +340,10 @@ async function buildOverviewMap(
       overview: { records, tasks, stats, intervalSeconds },
     } = result.value;
     successfulTaskIds.add(taskId);
+    const taskName =
+      tasks.find((task) => task.id === taskId)?.name ||
+      stats?.find((stat) => stat.taskId === taskId)?.name;
+    if (taskName) taskNames.set(taskId, taskName);
     itemsByTask.set(
       taskId,
       buildPingOverviewItems(taskId, records, stats, intervalSeconds),
@@ -307,20 +353,40 @@ async function buildOverviewMap(
     refreshIntervals.push(normalizeRefreshInterval(taskInterval));
   }
 
-  const items = new Map<string, PingOverviewItem>();
-  for (const [uuid, taskId] of selectedTaskByClient) {
+  const singleItems = new Map<string, PingOverviewItem>();
+  for (const [uuid, taskIds] of singleTaskIdsByClient) {
+    const taskId = taskIds[0];
+    if (taskId == null) continue;
+    const previousItem =
+      previous?.assignmentKey === assignmentKey
+        ? previous.singleItems.get(uuid)
+        : undefined;
     if (!successfulTaskIds.has(taskId)) {
-      const previousItem =
-        previous?.assignmentKey === assignmentKey ? previous.items.get(uuid) : undefined;
-      items.set(uuid, previousItem ?? assignedEmptyPing(uuid));
+      singleItems.set(uuid, previousItem ?? assignedEmptyPing(uuid));
       continue;
     }
-    const item = itemsByTask.get(taskId)?.get(uuid);
-    if (item) {
-      items.set(uuid, item);
-      continue;
-    }
-    items.set(uuid, assignedEmptyPing(uuid));
+    singleItems.set(
+      uuid,
+      itemsByTask.get(taskId)?.get(uuid) ?? assignedEmptyPing(uuid),
+    );
+  }
+
+  const multiLines = new Map<string, HomepagePingLine[]>();
+  for (const [uuid, taskIds] of multiTaskIdsByClient) {
+    const previousLines =
+      previous?.assignmentKey === assignmentKey
+        ? previous.multiLines.get(uuid)
+        : undefined;
+    const clientLines = taskIds.map((taskId) => {
+      const previousLine = previousLines?.find((line) => line.taskId === taskId);
+      if (!successfulTaskIds.has(taskId)) {
+        return previousLine ?? assignedEmptyLine(uuid, taskId);
+      }
+      const taskName = taskNames.get(taskId) ?? previousLine?.taskName ?? `任务 #${taskId}`;
+      const item = itemsByTask.get(taskId)?.get(uuid) ?? assignedEmptyPing(uuid);
+      return { taskId, taskName, ...item };
+    });
+    multiLines.set(uuid, clientLines);
   }
 
   return {
@@ -329,25 +395,29 @@ async function buildOverviewMap(
       refreshIntervals.length > 0
         ? Math.min(...refreshIntervals)
         : DEFAULT_PING_REFRESH_INTERVAL,
-    items,
+    singleItems,
+    multiLines,
   };
 }
 
 interface PingOverviewStoreState {
   assignmentKey: string;
   intervalMs: number;
-  items: Map<string, PingOverviewItem>;
+  singleItems: Map<string, PingOverviewItem>;
+  multiLines: Map<string, HomepagePingLine[]>;
 }
 
 let pingOverviewState: PingOverviewStoreState = {
   assignmentKey: "",
   intervalMs: DEFAULT_PING_REFRESH_INTERVAL,
-  items: new Map(),
+  singleItems: new Map(),
+  multiLines: new Map(),
 };
 let scheduledVisibleUuids: string[] = [];
 let scheduledVisibleKey = "";
 let scheduledBindings: HomepagePingTaskBindings = {};
-let scheduledBindingsKey = stringifyBindings({});
+let scheduledMultiTaskIds: number[] = [];
+let scheduledSelectionKey = `${stringifyBindings({})}|multi:`;
 let pingRefreshInFlight = false;
 let pingRefreshTimer: number | null = null;
 let pingAbortController: AbortController | null = null;
@@ -384,30 +454,62 @@ function stopPingPolling() {
 function commitPingOverview(
   assignmentKey: string,
   intervalMs: number,
-  items: Map<string, PingOverviewItem>,
+  singleItems: Map<string, PingOverviewItem>,
+  multiLines: Map<string, HomepagePingLine[]>,
 ) {
-  const prevItems = pingOverviewState.items;
-  const nextItems = new Map<string, PingOverviewItem>();
   const touched = new Set<string>();
-  const keys = new Set<string>([...prevItems.keys(), ...items.keys()]);
+  const prevSingleItems = pingOverviewState.singleItems;
+  const nextSingleItems = new Map<string, PingOverviewItem>();
+  const singleKeys = new Set<string>([
+    ...prevSingleItems.keys(),
+    ...singleItems.keys(),
+  ]);
 
-  for (const key of keys) {
-    const prev = prevItems.get(key);
-    const next = items.get(key);
+  for (const key of singleKeys) {
+    const prev = prevSingleItems.get(key);
+    const next = singleItems.get(key);
+    if (!next) {
+      if (prev) touched.add(key);
+      continue;
+    }
+    if (equalPingItem(prev, next)) {
+      nextSingleItems.set(key, prev ?? next);
+      continue;
+    }
+    nextSingleItems.set(key, next);
+    touched.add(key);
+  }
+
+  const prevMultiLines = pingOverviewState.multiLines;
+  const nextMultiLines = new Map<string, HomepagePingLine[]>();
+  const multiKeys = new Set<string>([
+    ...prevMultiLines.keys(),
+    ...multiLines.keys(),
+  ]);
+
+  for (const key of multiKeys) {
+    const prev = prevMultiLines.get(key);
+    const next = multiLines.get(key);
 
     if (!next) {
-      // buildOverviewMap 对每个被选中的 client 都会产出占位项，所以一个 key 缺失只可能是该
+      // buildPingOverviewMap 对每个被选中的 client 都会产出占位项，所以一个 key 缺失只可能是该
       // client 离开了选择集（assignmentKey 必然随之改变）。直接丢弃旧条目并通知订阅者。
       if (prev) touched.add(key);
       continue;
     }
 
-    if (equalPingItem(prev, next)) {
-      nextItems.set(key, prev ?? next);
+    const stable = next.map((line, index) =>
+      equalPingLine(prev?.[index], line) ? (prev?.[index] ?? line) : line,
+    );
+    const unchanged =
+      prev?.length === stable.length &&
+      stable.every((line, index) => line === prev[index]);
+    if (unchanged && prev) {
+      nextMultiLines.set(key, prev);
       continue;
     }
 
-    nextItems.set(key, next);
+    nextMultiLines.set(key, stable);
     touched.add(key);
   }
 
@@ -415,7 +517,8 @@ function commitPingOverview(
     pingOverviewState.assignmentKey === assignmentKey &&
     pingOverviewState.intervalMs === intervalMs &&
     touched.size === 0 &&
-    nextItems.size === prevItems.size
+    nextSingleItems.size === prevSingleItems.size &&
+    nextMultiLines.size === prevMultiLines.size
   ) {
     return;
   }
@@ -423,7 +526,8 @@ function commitPingOverview(
   pingOverviewState = {
     assignmentKey,
     intervalMs,
-    items: nextItems,
+    singleItems: nextSingleItems,
+    multiLines: nextMultiLines,
   };
 
   for (const key of touched) {
@@ -438,7 +542,7 @@ async function refreshPingOverview() {
 
   pingRefreshInFlight = true;
   const visibleKey = scheduledVisibleKey;
-  const bindingsKey = scheduledBindingsKey;
+  const selectionKey = scheduledSelectionKey;
   const controller = new AbortController();
   pingAbortController = controller;
   const { signal } = controller;
@@ -447,23 +551,34 @@ async function refreshPingOverview() {
   const isCurrent = () =>
     !signal.aborted &&
     visibleKey === scheduledVisibleKey &&
-    bindingsKey === scheduledBindingsKey;
+    selectionKey === scheduledSelectionKey;
 
   try {
     if (scheduledVisibleUuids.length === 0) {
-      commitPingOverview("", DEFAULT_PING_REFRESH_INTERVAL, new Map());
+      commitPingOverview(
+        "",
+        DEFAULT_PING_REFRESH_INTERVAL,
+        new Map(),
+        new Map(),
+      );
       return;
     }
 
-    const next = await buildOverviewMap(
+    const next = await buildPingOverviewMap(
       1,
       scheduledVisibleUuids,
       scheduledBindings,
+      scheduledMultiTaskIds,
       signal,
       pingOverviewState,
     );
     if (isCurrent()) {
-      commitPingOverview(next.assignmentKey, next.intervalMs, next.items);
+      commitPingOverview(
+        next.assignmentKey,
+        next.intervalMs,
+        next.singleItems,
+        next.multiLines,
+      );
       schedulePingRefresh(next.intervalMs);
     }
   } catch {
@@ -490,19 +605,21 @@ async function refreshPingOverview() {
 function ensurePingOverviewStarted(
   visibleUuids: string[],
   bindings: HomepagePingTaskBindings,
+  multiTaskIds: number[],
 ) {
   const normalizedVisibleUuids = normalizeVisibleUuids(visibleUuids);
   const visibleKey = normalizedVisibleUuids.join("|");
-  const bindingsKey = stringifyBindings(bindings);
+  const selectionKey = `${stringifyBindings(bindings)}|multi:${multiTaskIds.join(",")}`;
 
   if (
     scheduledVisibleKey !== visibleKey ||
-    scheduledBindingsKey !== bindingsKey
+    scheduledSelectionKey !== selectionKey
   ) {
     scheduledVisibleUuids = normalizedVisibleUuids;
     scheduledVisibleKey = visibleKey;
     scheduledBindings = bindings;
-    scheduledBindingsKey = bindingsKey;
+    scheduledMultiTaskIds = multiTaskIds;
+    scheduledSelectionKey = selectionKey;
 
     pingAbortController?.abort();
 
@@ -542,10 +659,14 @@ function subscribeToPingItem(uuid: string, listener: Listener) {
 }
 
 function getPingSnapshot(uuid: string) {
-  return pingOverviewState.items.get(uuid) ?? EMPTY_PING;
+  return pingOverviewState.singleItems.get(uuid) ?? EMPTY_PING;
 }
 
-export function useHomepagePingOverview() {
+function getPingLinesSnapshot(uuid: string) {
+  return pingOverviewState.multiLines.get(uuid) ?? EMPTY_PING_LINES;
+}
+
+export function useHomepagePingOverview(viewMode: NodeViewMode) {
   const { data: me } = useAuth();
   const visibleUuids = useVisibleNodeUuids(me?.logged_in === true);
   const allMeta = useAllNodeMeta();
@@ -564,11 +685,28 @@ export function useHomepagePingOverview() {
         : visibleUuids,
     [visibleUuids, hiddenUuids],
   );
+  const requestMode = resolveHomepagePingRequestMode(
+    viewMode,
+    themeSettings.enableHomepageMultiPing,
+    themeSettings.homepageMultiPingTaskIds,
+  );
+  const requestedBindings =
+    requestMode === "single"
+      ? themeSettings.homepagePingBindings
+      : EMPTY_BINDINGS;
+  const requestedMultiTaskIds =
+    requestMode === "multi"
+      ? themeSettings.homepageMultiPingTaskIds
+      : EMPTY_TASK_IDS;
 
   useEffect(() => {
     if (!themeSettings.isReady) return;
     activeConsumers += 1;
-    ensurePingOverviewStarted(effectiveUuids, themeSettings.homepagePingBindings);
+    ensurePingOverviewStarted(
+      effectiveUuids,
+      requestedBindings,
+      requestedMultiTaskIds,
+    );
     return () => {
       activeConsumers -= 1;
       if (activeConsumers <= 0) {
@@ -576,17 +714,43 @@ export function useHomepagePingOverview() {
         stopPingPolling();
       }
     };
-  }, [themeSettings.homepagePingBindings, themeSettings.isReady, effectiveUuids]);
+  }, [
+    effectiveUuids,
+    requestMode,
+    requestedBindings,
+    requestedMultiTaskIds,
+    themeSettings.isReady,
+  ]);
 }
 
-export function useNodePingOverview(uuid: string): PingOverviewItem {
+export function useNodePingOverview(
+  uuid: string,
+  enabled = true,
+): PingOverviewItem {
   const subscribe = useCallback(
-    (cb: Listener) => (uuid ? subscribeToPingItem(uuid, cb) : () => undefined),
-    [uuid],
+    (cb: Listener) =>
+      uuid && enabled ? subscribeToPingItem(uuid, cb) : () => undefined,
+    [enabled, uuid],
   );
   const getSnapshot = useCallback(
-    () => (uuid ? getPingSnapshot(uuid) : EMPTY_PING),
-    [uuid],
+    () => (uuid && enabled ? getPingSnapshot(uuid) : EMPTY_PING),
+    [enabled, uuid],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function useNodePingOverviewLines(
+  uuid: string,
+  enabled = true,
+): HomepagePingLine[] {
+  const subscribe = useCallback(
+    (cb: Listener) =>
+      uuid && enabled ? subscribeToPingItem(uuid, cb) : () => undefined,
+    [enabled, uuid],
+  );
+  const getSnapshot = useCallback(
+    () => (uuid && enabled ? getPingLinesSnapshot(uuid) : EMPTY_PING_LINES),
+    [enabled, uuid],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
@@ -690,10 +854,14 @@ export function buildPingBuckets(
 export function usePingBuckets(
   ping: Pick<PingOverviewItem, "samples" | "metricIntervalMs">,
   count?: number,
+  enabled = true,
 ): PingOverviewBucket[] {
   const { samples, metricIntervalMs } = ping;
   return useMemo(
-    () => buildPingBuckets({ samples, metricIntervalMs }, count),
-    [count, metricIntervalMs, samples],
+    () =>
+      enabled
+        ? buildPingBuckets({ samples, metricIntervalMs }, count)
+        : EMPTY_PING_BUCKETS,
+    [count, enabled, metricIntervalMs, samples],
   );
 }

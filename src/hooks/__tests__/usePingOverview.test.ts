@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPingOverviewMap,
   buildPingBuckets,
   buildPingOverviewItems,
+  resolveHomepagePingRequestMode,
 } from "@/hooks/usePingOverview";
 
 const MINUTE_MS = 60_000;
@@ -100,5 +102,113 @@ describe("homepage ping metric interval adaptation", () => {
 
     expect(buckets).toHaveLength(18);
     expect(buckets.filter((bucket) => bucket.total > 0)).toHaveLength(1);
+  });
+});
+
+function pingOverviewResponse(taskId: number, value: number) {
+  return {
+    records: [
+      {
+        task_id: taskId,
+        time: NOW,
+        value,
+        client: "node-a",
+        count: 1,
+        loss: 0,
+      },
+    ],
+    tasks: [
+      {
+        id: taskId,
+        interval: 60,
+        name: `Task ${taskId}`,
+        loss: 0,
+        clients: ["node-a"],
+        type: "icmp",
+        target: "example.com",
+        weight: taskId,
+      },
+    ],
+    stats: [],
+    intervalSeconds: 60,
+  };
+}
+
+describe("homepage ping polling selection", () => {
+  it("keeps large/compact and mini/list in their shared request modes", () => {
+    expect(resolveHomepagePingRequestMode("large", true, [1, 2, 3])).toBe("multi");
+    expect(resolveHomepagePingRequestMode("compact", true, [1, 2, 3])).toBe("multi");
+    expect(resolveHomepagePingRequestMode("mini", true, [1, 2, 3])).toBe("single");
+    expect(resolveHomepagePingRequestMode("list", true, [1, 2, 3])).toBe("single");
+    expect(resolveHomepagePingRequestMode("large", false, [1, 2, 3])).toBe("single");
+    expect(resolveHomepagePingRequestMode("large", true, [1, 2])).toBe("single");
+  });
+
+  it("retains the previous line when one multi-ping task fails", async () => {
+    const first = await buildPingOverviewMap(
+      1,
+      ["node-a"],
+      {},
+      [1, 2, 3],
+      undefined,
+      undefined,
+      async (_hours, taskId) => pingOverviewResponse(taskId ?? 0, (taskId ?? 0) * 10),
+    );
+
+    const second = await buildPingOverviewMap(
+      1,
+      ["node-a"],
+      {},
+      [1, 2, 3],
+      undefined,
+      first,
+      async (_hours, taskId) => {
+        if (taskId === 2) throw new Error("temporary task failure");
+        return pingOverviewResponse(taskId ?? 0, (taskId ?? 0) * 10 + 100);
+      },
+    );
+
+    expect(first.multiLines.get("node-a")?.map((line) => line.lastValue)).toEqual([
+      10,
+      20,
+      30,
+    ]);
+    expect(second.multiLines.get("node-a")?.map((line) => line.lastValue)).toEqual([
+      110,
+      20,
+      130,
+    ]);
+    expect(second.multiLines.get("node-a")?.[1]?.taskName).toBe("Task 2");
+  });
+
+  it("propagates polling cancellation to an in-flight request", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const pending = buildPingOverviewMap(
+      1,
+      ["node-a"],
+      { 8: ["node-a"] },
+      [],
+      controller.signal,
+      undefined,
+      async (_hours, taskId, options) => {
+        requestSignal = options?.signal;
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+        return pingOverviewResponse(taskId ?? 0, 80);
+      },
+    );
+
+    await Promise.resolve();
+    controller.abort();
+    const result = await pending;
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(result.singleItems.get("node-a")?.lastValue).toBeNull();
   });
 });
