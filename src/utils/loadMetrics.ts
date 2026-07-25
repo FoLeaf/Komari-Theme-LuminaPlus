@@ -3,12 +3,9 @@ import type { LoadRecord } from "@/types/komari";
 const LOAD_METRIC_FIELD = {
   "cpu.usage": "cpu",
   "memory.used": "ram",
-  "memory.total": "ram_total",
   "swap.used": "swap",
-  "swap.total": "swap_total",
   "load.average": "load",
   "disk.used": "disk",
-  "disk.total": "disk_total",
   "net.in.rate": "net_in",
   "net.out.rate": "net_out",
   "net.total.up": "net_total_up",
@@ -21,12 +18,40 @@ const LOAD_METRIC_FIELD = {
 export const LOAD_METRIC_KEYS = Object.keys(LOAD_METRIC_FIELD);
 
 export const LOAD_LAST_AGGREGATION = {
-  "memory.total": "last",
-  "swap.total": "last",
-  "disk.total": "last",
   "net.total.up": "last",
   "net.total.down": "last",
 } as const;
+
+export interface LoadRecordTotalFallbacks {
+  ramTotal?: number;
+  swapTotal?: number;
+  diskTotal?: number;
+}
+
+export interface ResolvedLoadRecordTotals {
+  ramTotal: number;
+  swapTotal: number;
+  diskTotal: number;
+}
+
+function nonNegativeFinite(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Komari 1.3.0 不再保存 memory.total、swap.total、disk.total 指标。
+ * 旧版记录仍优先使用当时保存的总量；缺失时使用节点基础信息里的当前总量。
+ */
+export function resolveLoadRecordTotals(
+  record: Pick<LoadRecord, "ram_total" | "swap_total" | "disk_total">,
+  fallbacks: LoadRecordTotalFallbacks = {},
+): ResolvedLoadRecordTotals {
+  return {
+    ramTotal: nonNegativeFinite(record.ram_total) || nonNegativeFinite(fallbacks.ramTotal),
+    swapTotal: nonNegativeFinite(record.swap_total) || nonNegativeFinite(fallbacks.swapTotal),
+    diskTotal: nonNegativeFinite(record.disk_total) || nonNegativeFinite(fallbacks.diskTotal),
+  };
+}
 
 export interface LoadMetricSeries {
   metricKey: string;

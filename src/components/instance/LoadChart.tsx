@@ -12,7 +12,7 @@ import UplotReact from "uplot-react";
 import type uPlot from "uplot";
 import { ArrowDown, ArrowUp, Cpu, Gauge, HardDrive, MemoryStick, Network, RefreshCw, Workflow } from "lucide-react";
 import { useLoadRecords } from "@/hooks/useRecords";
-import { useNodeMetrics } from "@/hooks/useNode";
+import { useNodeMeta, useNodeMetrics } from "@/hooks/useNode";
 import { InstancePanel, InstanceChartLoading } from "./InstancePanel";
 import {
   buildChartTooltipHooks,
@@ -31,6 +31,7 @@ import {
 } from "./chartData";
 import { formatBytes, formatTrafficRateLabel } from "@/utils/format";
 import { historyChartRangeSeconds, historyCoverageLabel } from "@/utils/historyRange";
+import { resolveLoadRecordTotals } from "@/utils/loadMetrics";
 import { usePreferences } from "@/hooks/usePreferences";
 import type { LoadRecord, NodeMetrics } from "@/types/komari";
 
@@ -384,9 +385,18 @@ export function LoadChart({
   );
   const isRealtime = hours === 0;
   const node = useNodeMetrics(uuid, isRealtime && active);
+  const meta = useNodeMeta(uuid);
   const { resolvedAppearance } = usePreferences();
   const [realtimePoints, setRealtimePoints] = useState<ChartPoint[]>([]);
   const [connectNulls, setConnectNulls] = useState(false);
+  const totalFallbacks = useMemo(
+    () => ({
+      ramTotal: meta?.mem_total,
+      swapTotal: meta?.swap_total,
+      diskTotal: meta?.disk_total,
+    }),
+    [meta?.disk_total, meta?.mem_total, meta?.swap_total],
+  );
 
   useEffect(() => {
     if (!active || !isRealtime || !node) return;
@@ -412,22 +422,25 @@ export function LoadChart({
   );
 
   const historyPoints = useMemo<ChartPoint[]>(() => {
-    const rawPoints = historyRecords.map(({ record, time }) => ({
-      time,
-      cpu: record.cpu,
-      ram: record.ram_total > 0 ? (record.ram / record.ram_total) * 100 : 0,
-      swap: record.swap_total > 0 ? (record.swap / record.swap_total) * 100 : 0,
-      disk: record.disk_total > 0 ? (record.disk / record.disk_total) * 100 : 0,
-      netIn: record.net_in,
-      netOut: record.net_out,
-      connections: record.connections,
-      udp: record.connections_udp,
-      process: record.process,
-    }));
+    const rawPoints = historyRecords.map(({ record, time }) => {
+      const totals = resolveLoadRecordTotals(record, totalFallbacks);
+      return {
+        time,
+        cpu: record.cpu,
+        ram: totals.ramTotal > 0 ? (record.ram / totals.ramTotal) * 100 : 0,
+        swap: totals.swapTotal > 0 ? (record.swap / totals.swapTotal) * 100 : 0,
+        disk: totals.diskTotal > 0 ? (record.disk / totals.diskTotal) * 100 : 0,
+        netIn: record.net_in,
+        netOut: record.net_out,
+        connections: record.connections,
+        udp: record.connections_udp,
+        process: record.process,
+      };
+    });
     const sampled = downsamplePoints(rawPoints, getHistoryRenderLimit(hours));
     const filled = fillMissingMetricPoints(sampled);
     return interpolateMetricGaps(filled, LOAD_INTERPOLATE_KEYS) as ChartPoint[];
-  }, [historyRecords, hours]);
+  }, [historyRecords, hours, totalFallbacks]);
 
   const points = useMemo<ChartPoint[]>(() => {
     if (isRealtime) {
@@ -443,6 +456,10 @@ export function LoadChart({
   }, [historyPoints, isRealtime, realtimePoints]);
 
   const rangeSummary = formatRangeSummary(hours);
+  const latestHistoryRecord = data?.records[data.records.length - 1];
+  const latestHistoryTotals = latestHistoryRecord
+    ? resolveLoadRecordTotals(latestHistoryRecord, totalFallbacks)
+    : null;
   const sourceRecordCount = historyRecords.length;
   const wasDownsampled = !isRealtime && sourceRecordCount > getHistoryRenderLimit(hours);
   const sampleSummary = isRealtime
@@ -557,8 +574,8 @@ export function LoadChart({
           value={
             isRealtime && node
               ? `${formatBytes(node.ramUsed)} / ${formatBytes(node.ramTotal)}`
-              : data?.records.length
-                ? `${formatBytes(data.records[data.records.length - 1]?.ram ?? 0)} / ${formatBytes(data.records[data.records.length - 1]?.ram_total ?? 0)}`
+              : latestHistoryRecord && latestHistoryTotals
+                ? `${formatBytes(latestHistoryRecord.ram)} / ${formatBytes(latestHistoryTotals.ramTotal)}`
                 : "—"
           }
           note={
@@ -566,8 +583,8 @@ export function LoadChart({
               ? node.swapTotal
                 ? `Swap ${formatBytes(node.swapUsed)} / ${formatBytes(node.swapTotal)}`
                 : "Swap 无"
-              : data?.records.length && (data.records[data.records.length - 1]?.swap_total ?? 0) > 0
-                ? `Swap ${formatBytes(data.records[data.records.length - 1]?.swap ?? 0)} / ${formatBytes(data.records[data.records.length - 1]?.swap_total ?? 0)}`
+              : latestHistoryRecord && latestHistoryTotals && latestHistoryTotals.swapTotal > 0
+                ? `Swap ${formatBytes(latestHistoryRecord.swap)} / ${formatBytes(latestHistoryTotals.swapTotal)}`
                 : "Swap 无"
           }
           points={points}
@@ -587,8 +604,8 @@ export function LoadChart({
           value={
             isRealtime && node
               ? `${formatBytes(node.diskUsed)} / ${formatBytes(node.diskTotal)}`
-              : data?.records.length
-                ? `${formatBytes(data.records[data.records.length - 1]?.disk ?? 0)} / ${formatBytes(data.records[data.records.length - 1]?.disk_total ?? 0)}`
+              : latestHistoryRecord && latestHistoryTotals
+                ? `${formatBytes(latestHistoryRecord.disk)} / ${formatBytes(latestHistoryTotals.diskTotal)}`
                 : "—"
           }
           note="已用空间"

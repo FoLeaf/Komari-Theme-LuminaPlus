@@ -188,4 +188,34 @@ describe("metric boundary repair in the API adapter", () => {
       { signal: undefined, timeout: 8_000 },
     );
   });
+
+  it("does not send removed Komari 1.3.0 total metrics in load queries", async () => {
+    rpcCallMock.mockResolvedValue({
+      start: START,
+      end: END,
+      series: [
+        metricSeries("memory.used", [
+          { time: "2026-07-15T03:30:00Z", value: 512, count: 1 },
+        ]),
+      ],
+    });
+
+    const result = await getLoadRecords("node-a", 1);
+
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({ client: "node-a", ram: 512 });
+    expect(rpcCallMock).toHaveBeenCalledTimes(1);
+    expect(rpcCallMock).toHaveBeenCalledWith(
+      "public:queryMetrics",
+      expect.objectContaining({
+        entity_ids: ["node-a"],
+        metric_keys: expect.not.arrayContaining([
+          "memory.total",
+          "swap.total",
+          "disk.total",
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
 });
