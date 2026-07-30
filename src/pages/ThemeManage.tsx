@@ -78,6 +78,7 @@ import {
   type OverviewRatingKind,
 } from "@/utils/overviewRating";
 import { HOME_SORT_FIELDS, HOME_SORT_FIELD_LABELS } from "@/utils/homeSort";
+import { ThemeManageSkeleton } from "@/pages/ThemeManageSkeleton";
 
 const APPEARANCE_OPTIONS = [
   { value: "light", label: "浅色", icon: Sun },
@@ -732,11 +733,7 @@ export function ThemeManage() {
   };
 
   if (configLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <Spinner size={24} />
-      </div>
-    );
+    return <ThemeManageSkeleton />;
   }
 
   if (!config) {
@@ -838,16 +835,16 @@ export function ThemeManage() {
         </div>
         <div className="theme-masthead-main">
           <div className="theme-masthead-headings">
-            <span className="theme-masthead-kicker">LUMINAPLUS · 主题控制台</span>
+            <span className="theme-masthead-kicker">LUMINAPLUS-19Y · 主题控制台</span>
             <h1 className="theme-masthead-title">主题设置</h1>
             <p className="theme-masthead-desc">
-              集中调整 LuminaPlus 的展示偏好与首页延迟绑定；保存后立即应用到当前站点。
+              集中调整 LuminaPlus-19y 的展示偏好与首页延迟绑定；保存后立即应用到当前站点。
             </p>
           </div>
           <dl className="theme-masthead-meta">
             <div>
               <dt>主题</dt>
-              <dd>{config?.theme || "Komari-Theme-LuminaPlus"}</dd>
+              <dd>{config?.theme || "Komari-Theme-LuminaPlus-19y"}</dd>
             </div>
             <div>
               <dt>已绑定 Ping</dt>

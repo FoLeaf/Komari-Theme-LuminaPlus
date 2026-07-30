@@ -58,28 +58,77 @@ describe("home responsive layout contracts", () => {
     expect(miniSource).toContain("encodeURIComponent(node.uuid)");
   });
 
-  it("does not render zero-value overview cards before the node store is hydrated", () => {
+  it("paints fixed-N light-pulse placeholders instead of zero-value live overview before hydrate", () => {
     expect(nodeGridSource).toContain("hydrated: storeHydrated");
-    expect(nodeGridSource).toContain("!themeSettings.isReady || !storeHydrated");
-    expect(nodeGridSource.indexOf("!themeSettings.isReady || !storeHydrated")).toBeLessThan(
+    // 冷分支只看 store hydrate；config 未到也用默认 theme 画骨架，禁止 return null。
+    expect(nodeGridSource).toContain("if (!storeHydrated)");
+    expect(nodeGridSource.indexOf("if (!storeHydrated)")).toBeLessThan(
       nodeGridSource.indexOf("const homeHeader"),
     );
+    expect(nodeGridSource).not.toContain("if (!themeSettings.isReady) return null");
+    // 冷分支：结构首页 + pulse 占位，禁止 Spinner / 禁止把 0 值真概览塞进 hydrate 前路径。
+    expect(nodeGridSource).toContain("HOME_PLACEHOLDER_COUNT");
+    expect(nodeGridSource).toContain("data-home-placeholders");
+    expect(nodeGridSource).toContain("data-home-overview-placeholder");
+    expect(nodeGridSource).toContain("HomeOverviewPlaceholder");
+    expect(nodeGridSource).toContain("HomePlaceholderGrid");
+    expect(nodeGridSource).toMatch(/large:\s*6/);
+    expect(nodeGridSource).toMatch(/compact:\s*6/);
+    expect(nodeGridSource).toMatch(/mini:\s*8/);
+    expect(nodeGridSource).toMatch(/list:\s*8/);
+    // 占位几何对齐各档 shell / contain-intrinsic-size，避免空 flex 塌成一条线。
+    expect(nodeGridSource).toContain("minHeight: 438");
+    expect(nodeGridSource).toContain("minHeight: 284");
+    expect(nodeGridSource).toContain("minHeight: 228");
+    expect(nodeGridSource).not.toMatch(/shimmer/i);
+    expect(nodeGridSource).not.toContain("IntersectionObserver");
+    expect(nodeGridSource).not.toMatch(/virtual(?:ized|List|Scroller)/i);
     const loadingBranch = nodeGridSource.slice(
-      nodeGridSource.indexOf("!themeSettings.isReady || !storeHydrated"),
+      nodeGridSource.indexOf("if (!storeHydrated)"),
       nodeGridSource.indexOf("const homeHeader"),
     );
-    expect(loadingBranch).not.toContain("<HomeBrand");
+    expect(loadingBranch).toContain("<HomeBrand");
+    expect(loadingBranch).toContain("HomeOverviewPlaceholder");
+    expect(loadingBranch).toContain("HomePlaceholderGrid");
     expect(loadingBranch).not.toContain("<Spinner");
+    expect(loadingBranch).not.toContain("<HomeOverviewCards");
+    expect(loadingBranch).not.toContain("return null");
+    // FloatingControls 仍等 ready+hydrated，冷启动不开放主题控件。
     expect(homeSource).toContain("const homeReady = themeSettings.isReady && storeHydrated");
     expect(homeSource).toContain("{homeReady && <FloatingControls");
   });
 
-  it("keeps access and initial home hydration behind one shell-owned spinner", () => {
+  it("never full-page spins home or theme-manage while still gating other data routes", () => {
     expect(appShellSource).toContain("useNodeStoreStatus(canHydrateHome)");
-    expect(appShellSource).toContain("isCheckingAccess || isCheckingHomeData");
-    expect(appShellSource).toContain("isCheckingShell ?");
+    expect(appShellSource).not.toContain("isCheckingHomeData");
+    // 首页 + 主题设置不因 publicConfig pending 挡 Outlet；其它数据页仍可 access spinner。
+    expect(appShellSource).toContain("skipAccessSpinner");
+    expect(appShellSource).toContain("isHomeDashboard || isThemeManageView");
+    expect(appShellSource).toContain("!skipAccessSpinner && isCheckingAccess");
+    expect(appShellSource).toMatch(/canHydrateHome[\s\S]*!isPrivateSite \|\| loggedIn/);
     expect(routerSource).toContain('import { Home } from "@/pages/Home"');
     expect(routerSource).not.toMatch(/const Home\s*=\s*lazy/);
     expect(routerSource).toContain("element: <Home />");
+  });
+
+  it("uses ThemeManageSkeleton instead of full-page spinners on theme-manage entry", () => {
+    expect(homeSource).toContain("ThemeManageSkeleton");
+    expect(homeSource).toContain('from "@/pages/ThemeManageSkeleton"');
+    expect(homeSource).toContain("fallback={<ThemeManageSkeleton />}");
+    expect(homeSource).not.toContain("<Spinner");
+    const skeletonSource = readFileSync(
+      new URL("../../pages/ThemeManageSkeleton.tsx", import.meta.url),
+      "utf8",
+    );
+    const themeManageSource = readFileSync(
+      new URL("../../pages/ThemeManage.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(skeletonSource).toContain("export function ThemeManageSkeleton");
+    expect(skeletonSource).toContain("data-theme-manage-skeleton");
+    expect(themeManageSource).toContain('from "@/pages/ThemeManageSkeleton"');
+    expect(themeManageSource).toMatch(
+      /if \(configLoading\) \{\s*return <ThemeManageSkeleton \/>;/,
+    );
   });
 });

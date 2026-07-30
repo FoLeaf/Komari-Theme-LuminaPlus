@@ -59,6 +59,14 @@ const GRID_LAYOUT: Record<NodeViewMode, { className: string; minColumnWidth: num
   list: { className: "", minColumnWidth: 0 },
 };
 
+/** 冷启动固定占位卡数量（不写假 UUID 进 store）。大/紧凑 6，迷你/列表 8。 */
+export const HOME_PLACEHOLDER_COUNT: Record<NodeViewMode, number> = {
+  large: 6,
+  compact: 6,
+  mini: 8,
+  list: 8,
+};
+
 type MiniGridStyle = CSSProperties & { "--mini-card-min-width": string };
 
 // 标准 UUID 不含逗号，可安全拼成稳定签名。
@@ -108,6 +116,90 @@ function HomeBrand({ siteName }: { siteName: string }) {
         {siteName}
       </h1>
     </header>
+  );
+}
+
+/** 冷启动概览壳：轻量 pulse，不用 0 值真概览（防假数据闪一下）。 */
+function HomeOverviewPlaceholder({ dense }: { dense: boolean }) {
+  // dense 档 CSS 把 .overview-card 设为 min-height:0（靠内容撑高）；空壳必须自带占位高，防 CLS。
+  const cardMinHeight = dense ? 88 : undefined;
+  return (
+    <section
+      className={`home-overview${dense ? " is-dense" : ""}`}
+      aria-label="首页总览"
+      aria-busy
+      data-home-overview-placeholder
+    >
+      {(["online", "bandwidth", "traffic", "asset"] as const).map((metric) => (
+        <article
+          key={metric}
+          className="overview-card animate-pulse"
+          data-metric={metric}
+          style={cardMinHeight != null ? { minHeight: cardMinHeight } : undefined}
+        />
+      ))}
+    </section>
+  );
+}
+
+/** 复用各档位已有空卡 pulse 壳，不挂假 uuid。高度对齐 CSS contain-intrinsic-size 估算，首屏不塌。 */
+function HomeCardPlaceholder({ mode }: { mode: Exclude<NodeViewMode, "list"> }) {
+  if (mode === "mini") {
+    return (
+      <div className="mini-node-card animate-pulse" style={{ minHeight: 228 }} aria-busy />
+    );
+  }
+  if (mode === "compact") {
+    return (
+      <div className="compact-node-card animate-pulse" style={{ minHeight: 284 }} aria-busy />
+    );
+  }
+  return (
+    <div
+      className="server-card animate-pulse"
+      style={{ minHeight: 438 }}
+      aria-busy
+    />
+  );
+}
+
+function HomePlaceholderGrid({
+  mode,
+  gridWrapClassName,
+  gridStyle,
+}: {
+  mode: NodeViewMode;
+  gridWrapClassName: string;
+  gridStyle: CSSProperties | MiniGridStyle | undefined;
+}) {
+  const count = HOME_PLACEHOLDER_COUNT[mode];
+  const slots = Array.from({ length: count }, (_, index) => index);
+
+  if (mode === "list") {
+    return (
+      <div className="node-list-scroll" data-home-placeholders aria-busy>
+        <div className="node-list">
+          {slots.map((index) => (
+            <div key={index} className="node-list-row is-loading" aria-busy />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={gridWrapClassName}
+      style={gridStyle}
+      data-home-placeholders
+      aria-busy
+    >
+      {slots.map((index) => (
+        <div key={index} className="min-w-0">
+          <HomeCardPlaceholder mode={mode} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -450,10 +542,12 @@ export function NodeGrid() {
       netDown,
     };
   }, [visibleNodes]);
-  const showHomeOverview = themeSettings.isReady && themeSettings.showHomeOverview;
+  // 冷启动占位也用默认/已解析的 showHomeOverview；真概览数字仍只在 hydrate 后画。
+  const showHomeOverview = themeSettings.showHomeOverview;
+  const showLiveHomeOverview = themeSettings.isReady && showHomeOverview;
   const hasNodes = visibleMeta.length > 0;
   // 卡内入口与悬浮入口互斥，避免重复操作入口。
-  const showAssetCard = showHomeOverview && hasNodes;
+  const showAssetCard = showLiveHomeOverview && hasNodes;
   const showCostDetailButton =
     showAssetCard && themeSettings.isReady && themeSettings.showCostSummary;
   const showCostFloatingButton =
@@ -635,16 +729,32 @@ export function NodeGrid() {
     ? { gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, 340px), 1fr))` }
     : gridStyle;
 
-  if (!themeSettings.isReady || !storeHydrated) {
-    if (!nodeInfoError) return null;
+  // config 未到也用默认 theme 画骨架；禁止 return null / 全页 Spinner。
+  // hydrate 未完成：结构首页 + 固定 N 轻量 pulse 占位。
+  if (!storeHydrated) {
+    if (nodeInfoError) {
+      return (
+        <div
+          className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]"
+          aria-live="polite"
+        >
+          <span className="text-[14px]">节点数据暂时无法加载</span>
+          <span className="text-[12px]">正在等待后端自动重试</span>
+        </div>
+      );
+    }
     return (
-      <div
-        className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]"
-        aria-live="polite"
-      >
-        <span className="text-[14px]">节点数据暂时无法加载</span>
-        <span className="text-[12px]">正在等待后端自动重试</span>
-      </div>
+      <>
+        <HomeBrand siteName={siteName} />
+        {showHomeOverview && (
+          <HomeOverviewPlaceholder dense={mode === "mini" || mode === "list"} />
+        )}
+        <HomePlaceholderGrid
+          mode={mode}
+          gridWrapClassName={gridWrapClassName}
+          gridStyle={gridStyle}
+        />
+      </>
     );
   }
 
@@ -664,7 +774,7 @@ export function NodeGrid() {
         </Link>
       )}
       <HomeBrand siteName={siteName} />
-      {showHomeOverview && (
+      {showLiveHomeOverview && (
         <HomeOverviewCards
           overview={overview}
           dense={mode === "mini" || mode === "list"}

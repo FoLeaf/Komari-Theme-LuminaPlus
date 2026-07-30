@@ -2,10 +2,10 @@ import { lazy, Suspense, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { NodeGrid } from "@/components/node/NodeGrid";
 import { FloatingControls } from "@/components/shell/FloatingControls";
-import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/hooks/useAuth";
 import { useNodeStoreStatus } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
+import { ThemeManageSkeleton } from "@/pages/ThemeManageSkeleton";
 
 const ThemeManage = lazy(() =>
   import("@/pages/ThemeManage").then((module) => ({ default: module.ThemeManage })),
@@ -41,24 +41,15 @@ export function Home() {
   if (isThemeManageView) {
     if (me?.logged_in) {
       return (
-        <Suspense
-          fallback={
-            <div className="flex min-h-[60vh] items-center justify-center">
-              <Spinner size={24} />
-            </div>
-          }
-        >
+        <Suspense fallback={<ThemeManageSkeleton />}>
           <ThemeManage />
         </Suspense>
       );
     }
 
+    // auth 未决：骨架而非转圈；未登录确定后回首页。
     if (authPending || (!me && authFetching)) {
-      return (
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <Spinner size={24} />
-        </div>
-      );
+      return <ThemeManageSkeleton />;
     }
 
     if (authError) {

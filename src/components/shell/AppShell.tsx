@@ -22,30 +22,42 @@ export function AppShell() {
     normalizedPath === "/assets" ||
     normalizedPath === "/traffic" ||
     normalizedPath.startsWith("/instance/");
+  const view = new URLSearchParams(search).get("view");
+  const isThemeManageView = normalizedPath === "/" && view === "theme-manage";
+  const isHomeDashboard = normalizedPath === "/" && !isThemeManageView;
+  // 首页与主题设置：等待期画骨架，不全屏 Spinner。
+  const skipAccessSpinner = isHomeDashboard || isThemeManageView;
+
+  const accessError = isDataRoute && publicConfig.isError && !publicConfig.data;
+  const isPrivateSite = publicConfig.data?.private_site === true;
+  const authPending = auth.isPending;
+  const loggedIn = auth.data?.logged_in === true;
+  // 已确认私有且未登录：锁站。auth 未决时不落锁，首页/主题设置改画骨架。
+  const isPrivateVisitor =
+    isDataRoute && isPrivateSite && !authPending && !loggedIn;
+
   const isCheckingAccess =
     isDataRoute &&
-    (publicConfig.isPending ||
-      (publicConfig.data?.private_site === true && auth.isPending));
-  const accessError = isDataRoute && publicConfig.isError && !publicConfig.data;
-  const isPrivateVisitor =
-    isDataRoute &&
-    publicConfig.data?.private_site === true &&
-    !auth.isPending &&
-    auth.data?.logged_in !== true;
-  const isHomeDashboard =
-    normalizedPath === "/" && new URLSearchParams(search).get("view") !== "theme-manage";
+    (publicConfig.isPending || (isPrivateSite && authPending));
+
+  // 其它数据页：仍用 access spinner（Assets/Instance 等本轮不动）。
+  const blockWithSpinner = isDataRoute && !skipAccessSpinner && isCheckingAccess;
+
+  // config 未到时乐观开 hydrate（公开站主路径）。
+  // 私有站仅登录后拉节点，避免未授权请求；等 auth 期间首页仍只画占位。
   const canHydrateHome =
-    isHomeDashboard && !isCheckingAccess && !accessError && !isPrivateVisitor;
-  const homeStoreStatus = useNodeStoreStatus(canHydrateHome);
-  const isCheckingHomeData =
-    canHydrateHome && !homeStoreStatus.hydrated && !homeStoreStatus.nodeInfoError;
-  const isCheckingShell = isCheckingAccess || isCheckingHomeData;
+    isHomeDashboard && !accessError && (!isPrivateSite || loggedIn);
+
+  useNodeStoreStatus(canHydrateHome);
+
+  const showOutlet = !accessError && !isPrivateVisitor && !blockWithSpinner;
+
   return (
     <div className="relative flex min-h-screen flex-col">
       <BackgroundLayer />
       <main className="app-main flex-1 px-3 pb-8 sm:px-5 md:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-[1720px]">
-          {isCheckingShell ? (
+          {blockWithSpinner ? (
             <div className="flex min-h-[60vh] items-center justify-center">
               <Spinner size={24} />
             </div>
@@ -53,9 +65,9 @@ export function AppShell() {
             <AccessError onRetry={() => void publicConfig.refetch()} />
           ) : isPrivateVisitor ? (
             <PrivateSiteGate />
-          ) : (
+          ) : showOutlet ? (
             <Outlet />
-          )}
+          ) : null}
         </div>
       </main>
     </div>

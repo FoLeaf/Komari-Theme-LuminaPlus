@@ -796,6 +796,11 @@ body::after {
   color: color-mix(in srgb, var(--progress-cpu) 78%, white 22%);
 }
 
+/* 主题设置冷启动：固定面板高度，避免 pulse 空壳塌成细条。 */
+.theme-manage-skeleton-panel {
+  min-height: 9.5rem;
+}
+
 .theme-manage-empty-state {
   display: flex;
   flex-wrap: wrap;
