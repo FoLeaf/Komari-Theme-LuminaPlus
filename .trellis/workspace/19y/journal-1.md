@@ -91,3 +91,24 @@ Removed full-page spinners on home and theme-manage: fixed-N card placeholders, 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Session: homepage-first-paint-no-spinner + first-time page load perf
+
+**Date**: 2026-07-30
+**Task**: Session: homepage-first-paint-no-spinner + first-time page load perf
+**Branch**: `main`
+
+### Summary
+
+Implemented Vite optimizations, lazy loading for Home/Traffic, React.memo on critical components. Bundle split and preloads improve cold-start FCP/TTI. Task archived.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `330a042` | (see git log) |
+
+### Status
+
+[OK] **Completed**
