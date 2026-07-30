@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign } from "lucide-react";
@@ -453,7 +453,7 @@ function RegionTabs({
   );
 }
 
-export function NodeGrid() {
+function NodeGrid() {
   const now = useHourlyClock();
   const queryClient = useQueryClient();
   const nodes = useHomeNodeSummaries();
@@ -840,3 +840,6 @@ export function NodeGrid() {
     </>
   );
 }
+
+export { NodeGrid };
+export default memo(NodeGrid);

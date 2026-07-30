@@ -1,5 +1,7 @@
+import { memo as ReactMemo } from "react";
+
 /** 主题设置冷启动骨架：轻量 pulse，替代全页 Spinner（auth / lazy / config）。 */
-export function ThemeManageSkeleton() {
+const ThemeManageSkeleton = ReactMemo(function ThemeManageSkeleton() {
   return (
     <div
       className="theme-manage flex flex-col gap-5 py-2"
@@ -53,4 +55,7 @@ export function ThemeManageSkeleton() {
       ))}
     </div>
   );
-}
+});
+
+export { ThemeManageSkeleton };
+export default ThemeManageSkeleton;

@@ -10,8 +10,15 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  optimizeDeps: {
+    include: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"],
+    force: false,
+  },
   build: {
-    target: ["es2020", "safari15.4", "chrome87"],
+    target: "esnext",
+    minify: "esbuild",
+    cssMinify: true,
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -34,7 +41,19 @@ export default defineConfig({
           if (normalized.includes("/node_modules/zod/")) {
             return "validation";
           }
+          // Additional splits for app code
+          if (normalized.includes("/src/pages/")) {
+            return "pages";
+          }
+          if (normalized.includes("/src/components/")) {
+            return "components";
+          }
+          if (normalized.includes("/src/hooks/")) {
+            return "hooks";
+          }
         },
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
       },
     },
   },
