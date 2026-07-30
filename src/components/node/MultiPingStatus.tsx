@@ -28,7 +28,7 @@ const MultiPingMetricRow = memo(function MultiPingMetricRow({
   const lossColor = lossHeatColor(line.loss);
   const latencyLabel =
     line.lastValue == null ? "无样本" : `${Math.round(line.lastValue)}ms`;
-  const lossLabel = line.loss == null ? "—" : `${line.loss.toFixed(1)}%`;
+  const lossLabel = line.loss == null ? "无样本" : `${line.loss.toFixed(1)}%`;
   const hoveredBucket =
     hoveredIndex == null ? null : (line.buckets[hoveredIndex] ?? null);
   const tooltip = hoveredBucket
@@ -40,7 +40,7 @@ const MultiPingMetricRow = memo(function MultiPingMetricRow({
   const unit = metric === "latency" ? "ms" : "%";
   const displayValue =
     value == null
-      ? "—"
+      ? "无样本"
       : metric === "latency"
         ? Math.round(value)
         : value.toFixed(1);
@@ -124,14 +124,57 @@ const MultiPingMetricColumn = memo(function MultiPingMetricColumn({
   );
 });
 
+const MultiPingColdStartPlaceholder = memo(function MultiPingColdStartPlaceholder({
+  density,
+}: {
+  density: MultiPingStatusDensity;
+}) {
+  const slots = [0, 1, 2];
+  return (
+    <div className="multi-ping-columns" aria-hidden>
+      {(["latency", "loss"] as const).map((metric) => (
+        <div
+          key={metric}
+          className="multi-ping-metric-column"
+          aria-label={metric === "latency" ? "延迟" : "丢包"}
+        >
+          {slots.map((slot) => (
+            <div key={slot} className="multi-ping-metric-row is-pulse">
+              <div
+                className={clsx(
+                  "multi-ping-metric-head",
+                  metric === "loss" && "is-value-only",
+                )}
+              >
+                {metric === "latency" && (
+                  <span className="multi-ping-name multi-ping-pulse-block" />
+                )}
+                <strong className="multi-ping-value multi-ping-pulse-block is-value" />
+              </div>
+              <span
+                className={clsx(
+                  "multi-ping-buckets multi-ping-pulse-block is-bars",
+                  density === "compact" && "is-compact-bars",
+                )}
+              />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+});
+
 export const MultiPingStatus = memo(function MultiPingStatus({
   lines,
   density,
   className,
+  coldStart = false,
 }: {
   lines: HomepagePingDisplayLine[];
   density: MultiPingStatusDensity;
   className?: string;
+  coldStart?: boolean;
 }) {
   const { resolvedAppearance } = usePreferences();
   const colorsVersion = useMetricColorsVersion();
@@ -139,24 +182,34 @@ export const MultiPingStatus = memo(function MultiPingStatus({
 
   return (
     <div
-      className={clsx("multi-ping-status", `is-${density}`, className)}
+      className={clsx(
+        "multi-ping-status",
+        `is-${density}`,
+        coldStart && "is-cold-start",
+        className,
+      )}
       role="group"
       aria-label="三网延迟与丢包"
+      aria-busy={coldStart || undefined}
     >
-      <div className="multi-ping-columns">
-        <MultiPingMetricColumn
-          lines={lines}
-          metric="latency"
-          density={density}
-          redrawKey={redrawKey}
-        />
-        <MultiPingMetricColumn
-          lines={lines}
-          metric="loss"
-          density={density}
-          redrawKey={redrawKey}
-        />
-      </div>
+      {coldStart ? (
+        <MultiPingColdStartPlaceholder density={density} />
+      ) : (
+        <div className="multi-ping-columns">
+          <MultiPingMetricColumn
+            lines={lines}
+            metric="latency"
+            density={density}
+            redrawKey={redrawKey}
+          />
+          <MultiPingMetricColumn
+            lines={lines}
+            metric="loss"
+            density={density}
+            redrawKey={redrawKey}
+          />
+        </div>
+      )}
     </div>
   );
 });

@@ -109,7 +109,11 @@ describe("metric boundary repair in the API adapter", () => {
 
   it("does not request raw data when the aggregate boundary is continuous", async () => {
     installRpcResponses({ hasGap: false });
-    const result = await getPingOverview(1, 7, { entityIds: ["node-a"] });
+    const result = await getPingOverview(1, 7, {
+      entityIds: ["node-a"],
+      includeStats: true,
+      repairBoundary: true,
+    });
 
     expect(result.records).toHaveLength(3);
     const metricCalls = rpcCallMock.mock.calls.filter(
@@ -120,7 +124,11 @@ describe("metric boundary repair in the API adapter", () => {
 
   it("requests only the bounded raw window and fills the empty bucket", async () => {
     installRpcResponses({ hasGap: true });
-    const result = await getPingOverview(1, 7, { entityIds: ["node-a"] });
+    const result = await getPingOverview(1, 7, {
+      entityIds: ["node-a"],
+      includeStats: true,
+      repairBoundary: true,
+    });
 
     expect(result.records).toHaveLength(3);
     expect(result.records.find((record) => record.time === "2026-07-15T03:44:00Z"))
@@ -142,11 +150,55 @@ describe("metric boundary repair in the API adapter", () => {
 
   it("keeps the aggregate result when the optional raw repair fails", async () => {
     installRpcResponses({ hasGap: true, rawFails: true });
+    const result = await getPingOverview(1, 7, {
+      entityIds: ["node-a"],
+      includeStats: true,
+      repairBoundary: true,
+    });
+
+    expect(result.records).toHaveLength(2);
+    expect(result.records.map((record) => record.time)).not.toContain(
+      "2026-07-15T03:44:00Z",
+    );
+  });
+
+  it("skips stats and boundary repair on the lean homepage overview path", async () => {
+    installRpcResponses({ hasGap: true });
+
     const result = await getPingOverview(1, 7, { entityIds: ["node-a"] });
 
     expect(result.records).toHaveLength(2);
     expect(result.records.map((record) => record.time)).not.toContain(
       "2026-07-15T03:44:00Z",
+    );
+    const metricCalls = rpcCallMock.mock.calls.filter(
+      ([method]) => method === "public:queryMetrics",
+    );
+    expect(metricCalls).toHaveLength(1);
+    expect(rpcCallMock).not.toHaveBeenCalledWith(
+      "public:getPingMetricStats",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("batches multi-task homepage overview without task tags", async () => {
+    installRpcResponses({ hasGap: false });
+
+    const result = await getPingOverview(1, undefined, { entityIds: ["node-a"] });
+
+    expect(result.records.length).toBeGreaterThan(0);
+    const metricCalls = rpcCallMock.mock.calls.filter(
+      ([method]) => method === "public:queryMetrics",
+    );
+    expect(metricCalls).toHaveLength(1);
+    expect(metricCalls[0][1]).not.toHaveProperty("tags");
+    expect(rpcCallMock).not.toHaveBeenCalledWith(
+      "public:getPingMetricStats",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
     );
   });
 

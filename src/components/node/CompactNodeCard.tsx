@@ -678,6 +678,7 @@ export const CompactNodeCard = memo(function CompactNodeCard({
     ping,
     pingBuckets,
     homepagePingLines,
+    homepagePingColdStart,
     compactFooterTags: footerTags,
     subtitle,
     renewalPrice,
@@ -717,10 +718,11 @@ export const CompactNodeCard = memo(function CompactNodeCard({
         renewalPrice={renewalPrice}
       />
       <CompactTrafficBar traffic={traffic} uptimeLabel={uptimeLabel} />
-      {homepagePingLines.length === 3 ? (
+      {homepagePingLines.length === 3 || homepagePingColdStart ? (
         <MultiPingStatus
           lines={homepagePingLines}
           density="compact"
+          coldStart={homepagePingColdStart}
           className="compact-node-bottom"
         />
       ) : (

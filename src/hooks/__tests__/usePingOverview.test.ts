@@ -144,7 +144,11 @@ describe("homepage ping polling selection", () => {
     expect(resolveHomepagePingRequestMode("large", true, [1, 2])).toBe("single");
   });
 
-  it("retains the previous line when one multi-ping task fails", async () => {
+  it("loads multi-ping with one batched overview request and splits by task", async () => {
+    let calls = 0;
+    let seenOptions:
+      | { includeStats?: boolean; repairBoundary?: boolean; entityIds?: string[] }
+      | undefined;
     const first = await buildPingOverviewMap(
       1,
       ["node-a"],
@@ -152,7 +156,71 @@ describe("homepage ping polling selection", () => {
       [1, 2, 3],
       undefined,
       undefined,
-      async (_hours, taskId) => pingOverviewResponse(taskId ?? 0, (taskId ?? 0) * 10),
+      async (_hours, taskId, options) => {
+        calls += 1;
+        expect(taskId).toBeUndefined();
+        seenOptions = {
+          includeStats: options?.includeStats,
+          repairBoundary: options?.repairBoundary,
+          entityIds: options?.entityIds,
+        };
+        return {
+          records: [
+            ...pingOverviewResponse(1, 10).records,
+            ...pingOverviewResponse(2, 20).records,
+            ...pingOverviewResponse(3, 30).records,
+          ],
+          tasks: [
+            ...pingOverviewResponse(1, 10).tasks,
+            ...pingOverviewResponse(2, 20).tasks,
+            ...pingOverviewResponse(3, 30).tasks,
+          ],
+          stats: [],
+          intervalSeconds: 60,
+        };
+      },
+    );
+
+    expect(calls).toBe(1);
+    expect(seenOptions).toEqual({
+      includeStats: false,
+      repairBoundary: false,
+      entityIds: ["node-a"],
+    });
+    expect(first.multiLines.get("node-a")?.map((line) => line.lastValue)).toEqual([
+      10,
+      20,
+      30,
+    ]);
+    expect(first.multiLines.get("node-a")?.map((line) => line.taskName)).toEqual([
+      "Task 1",
+      "Task 2",
+      "Task 3",
+    ]);
+  });
+
+  it("retains previous multi-ping lines when the batched request fails", async () => {
+    const first = await buildPingOverviewMap(
+      1,
+      ["node-a"],
+      {},
+      [1, 2, 3],
+      undefined,
+      undefined,
+      async () => ({
+        records: [
+          ...pingOverviewResponse(1, 10).records,
+          ...pingOverviewResponse(2, 20).records,
+          ...pingOverviewResponse(3, 30).records,
+        ],
+        tasks: [
+          ...pingOverviewResponse(1, 10).tasks,
+          ...pingOverviewResponse(2, 20).tasks,
+          ...pingOverviewResponse(3, 30).tasks,
+        ],
+        stats: [],
+        intervalSeconds: 60,
+      }),
     );
 
     const second = await buildPingOverviewMap(
@@ -162,9 +230,8 @@ describe("homepage ping polling selection", () => {
       [1, 2, 3],
       undefined,
       first,
-      async (_hours, taskId) => {
-        if (taskId === 2) throw new Error("temporary task failure");
-        return pingOverviewResponse(taskId ?? 0, (taskId ?? 0) * 10 + 100);
+      async () => {
+        throw new Error("temporary batch failure");
       },
     );
 
@@ -174,9 +241,9 @@ describe("homepage ping polling selection", () => {
       30,
     ]);
     expect(second.multiLines.get("node-a")?.map((line) => line.lastValue)).toEqual([
-      110,
+      10,
       20,
-      130,
+      30,
     ]);
     expect(second.multiLines.get("node-a")?.[1]?.taskName).toBe("Task 2");
   });
@@ -211,4 +278,26 @@ describe("homepage ping polling selection", () => {
     expect(requestSignal?.aborted).toBe(true);
     expect(result.singleItems.get("node-a")?.lastValue).toBeNull();
   });
+
+  it("uses the lean overview options on the single-task homepage path", async () => {
+    let seen: { includeStats?: boolean; repairBoundary?: boolean } | undefined;
+    await buildPingOverviewMap(
+      1,
+      ["node-a"],
+      { 8: ["node-a"] },
+      [],
+      undefined,
+      undefined,
+      async (_hours, taskId, options) => {
+        seen = {
+          includeStats: options?.includeStats,
+          repairBoundary: options?.repairBoundary,
+        };
+        return pingOverviewResponse(taskId ?? 8, 42);
+      },
+    );
+
+    expect(seen).toEqual({ includeStats: false, repairBoundary: false });
+  });
 });
+

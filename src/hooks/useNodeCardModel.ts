@@ -7,6 +7,7 @@ import {
   useNodePingOverview,
   useNodePingOverviewLines,
   usePingBuckets,
+  usePingOverviewHydrated,
 } from "@/hooks/usePingOverview";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
 import type { HomepagePingDisplayLine, HomepagePingLine } from "@/types/komari";
@@ -55,6 +56,8 @@ export function useNodeCardModel(
     homepageMultiPingTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT;
   const realPing = useNodePingOverview(uuid, !multiPingActive);
   const realPingLines = useNodePingOverviewLines(uuid, multiPingActive);
+  const pingHydrated = usePingOverviewHydrated();
+  const homepagePingColdStart = multiPingActive && !pingHydrated;
   const now = useHourlyClock();
   const ping = useFakePingFallback(
     uuid,
@@ -149,6 +152,7 @@ export function useNodeCardModel(
         ping,
         pingBuckets,
         homepagePingLines,
+        homepagePingColdStart,
       };
     }
 
@@ -183,6 +187,7 @@ export function useNodeCardModel(
       ping,
       pingBuckets,
       homepagePingLines,
+      homepagePingColdStart,
       traffic,
       ...metaModel,
       ...pingModel,
@@ -194,6 +199,7 @@ export function useNodeCardModel(
       isOffline: metrics.online === false,
     };
   }, [
+    homepagePingColdStart,
     homepagePingLines,
     meta,
     metrics,

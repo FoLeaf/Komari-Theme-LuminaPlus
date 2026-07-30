@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useAllNodeMeta, useVisibleNodeUuids } from "@/hooks/useNode";
 import { useThemeSettings } from "@/hooks/useThemeSettings";
-import { getPingOverview } from "@/services/api";
+import { getPingOverview, type PingOverviewOptions } from "@/services/api";
 import type {
   HomepagePingLine,
   PingOverviewBucket,
@@ -304,53 +304,88 @@ export async function buildPingOverviewMap(
     };
   }
 
-  const overviewResults = await Promise.allSettled(
-    selectedTaskIds.map((taskId) =>
-      withTimeoutSignal(
-        async (requestSignal) => {
-          const entityIds = normalizedUuids.filter(
-            (uuid) => requestedTaskIdsByClient.get(uuid)?.includes(taskId),
-          );
-          return {
-            taskId,
-            overview: await loadOverview(hours, taskId, {
-              signal: requestSignal,
-              entityIds,
-            }),
-          };
-        },
-        PING_REQUEST_TIMEOUT_MS,
-        signal,
-      ),
-    ),
-  );
+  const leanOptions: Pick<PingOverviewOptions, "includeStats" | "repairBoundary"> = {
+    includeStats: false,
+    repairBoundary: false,
+  };
+  const multiBatch =
+    multiTaskIds.length === HOMEPAGE_MULTI_PING_TASK_COUNT &&
+    multiTaskIdsByClient.size > 0;
 
   const itemsByTask = new Map<number, Map<string, PingOverviewItem>>();
   const taskNames = new Map<number, string>();
   const successfulTaskIds = new Set<number>();
   const refreshIntervals: number[] = [];
 
-  for (const result of overviewResults) {
-    if (result.status !== "fulfilled") {
-      continue;
-    }
-
-    const {
-      taskId,
-      overview: { records, tasks, stats, intervalSeconds },
-    } = result.value;
+  const ingestOverview = (
+    taskId: number,
+    overview: Awaited<ReturnType<typeof getPingOverview>>,
+  ) => {
     successfulTaskIds.add(taskId);
     const taskName =
-      tasks.find((task) => task.id === taskId)?.name ||
-      stats?.find((stat) => stat.taskId === taskId)?.name;
+      overview.tasks.find((task) => task.id === taskId)?.name ||
+      overview.stats?.find((stat) => stat.taskId === taskId)?.name;
     if (taskName) taskNames.set(taskId, taskName);
     itemsByTask.set(
       taskId,
-      buildPingOverviewItems(taskId, records, stats, intervalSeconds),
+      buildPingOverviewItems(
+        taskId,
+        overview.records,
+        overview.stats,
+        overview.intervalSeconds,
+      ),
+    );
+    const taskInterval = overview.tasks.find((task) => task.id === taskId)?.interval;
+    refreshIntervals.push(normalizeRefreshInterval(taskInterval));
+  };
+
+  if (multiBatch) {
+    try {
+      const overview = await withTimeoutSignal(
+        (requestSignal) =>
+          loadOverview(hours, undefined, {
+            signal: requestSignal,
+            entityIds: normalizedUuids,
+            ...leanOptions,
+          }),
+        PING_REQUEST_TIMEOUT_MS,
+        signal,
+      );
+      for (const taskId of selectedTaskIds) {
+        ingestOverview(taskId, overview);
+      }
+    } catch {
+      // 整批失败时保留 previous；下面按 successfulTaskIds 回填。
+    }
+  } else {
+    const overviewResults = await Promise.allSettled(
+      selectedTaskIds.map((taskId) =>
+        withTimeoutSignal(
+          async (requestSignal) => {
+            const entityIds = normalizedUuids.filter(
+              (uuid) => requestedTaskIdsByClient.get(uuid)?.includes(taskId),
+            );
+            return {
+              taskId,
+              overview: await loadOverview(hours, taskId, {
+                signal: requestSignal,
+                entityIds,
+                ...leanOptions,
+              }),
+            };
+          },
+          PING_REQUEST_TIMEOUT_MS,
+          signal,
+        ),
+      ),
     );
 
-    const taskInterval = tasks.find((task) => task.id === taskId)?.interval;
-    refreshIntervals.push(normalizeRefreshInterval(taskInterval));
+    for (const result of overviewResults) {
+      if (result.status !== "fulfilled") {
+        continue;
+      }
+      ingestOverview(result.value.taskId, result.value.overview);
+    }
   }
 
   const singleItems = new Map<string, PingOverviewItem>();
@@ -422,7 +457,16 @@ let pingRefreshInFlight = false;
 let pingRefreshTimer: number | null = null;
 let pingAbortController: AbortController | null = null;
 let activeConsumers = 0;
+/** 冷启动：第一次 refresh 结束前为 false；F5 重置模块即回到 false。 */
+let pingOverviewHydrated = false;
 const pingListeners = new Map<string, Set<Listener>>();
+const pingHydrateListeners = new Set<Listener>();
+
+function setPingOverviewHydrated(next: boolean) {
+  if (pingOverviewHydrated === next) return;
+  pingOverviewHydrated = next;
+  for (const listener of pingHydrateListeners) listener();
+}
 
 function schedulePingRefresh(intervalMs: number) {
   if (pingRefreshTimer != null) {
@@ -588,6 +632,11 @@ async function refreshPingOverview() {
   } finally {
     pingRefreshInFlight = false;
     if (pingAbortController === controller) pingAbortController = null;
+    // 第一次「有可见节点」的尝试结束即结束冷启动（成功或失败都算）。
+    // 节点尚未就绪时的空 uuid 早退不算尝试——否则会在首屏数据到达前就关掉 pulse。
+    if (isCurrent() && scheduledVisibleUuids.length > 0) {
+      setPingOverviewHydrated(true);
+    }
     // 只要消费者还想轮询但队列里没有任务，就恢复轮询。这覆盖了执行中途 assignment
     // 变化（上面那次跑会跳过 commit）以及 abort/重新挂载竞态（如 StrictMode:
     // mount→stop(abort)→mount），后者里被 abort 的那次不能负责重新调度。成功或失败
@@ -753,6 +802,26 @@ export function useNodePingOverviewLines(
     [enabled, uuid],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function subscribeToPingHydrated(listener: Listener) {
+  pingHydrateListeners.add(listener);
+  return () => {
+    pingHydrateListeners.delete(listener);
+  };
+}
+
+function getPingHydratedSnapshot() {
+  return pingOverviewHydrated;
+}
+
+export function usePingOverviewHydrated(): boolean {
+  // 稳定 subscribe/getSnapshot 引用：卡片 1s tick 时不应反复 unsub/resub。
+  return useSyncExternalStore(
+    subscribeToPingHydrated,
+    getPingHydratedSnapshot,
+    getPingHydratedSnapshot,
+  );
 }
 
 export function buildPingBuckets(

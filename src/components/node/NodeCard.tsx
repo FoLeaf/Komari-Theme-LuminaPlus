@@ -88,6 +88,7 @@ export const NodeCard = memo(function NodeCard({
     ping,
     pingBuckets,
     homepagePingLines,
+    homepagePingColdStart,
     footerTags,
     subtitle,
     expire,
@@ -153,10 +154,11 @@ export const NodeCard = memo(function NodeCard({
             </div>
           )}
 
-          {homepagePingLines.length === 3 ? (
+          {homepagePingLines.length === 3 || homepagePingColdStart ? (
             <MultiPingStatus
               lines={homepagePingLines}
               density="large"
+              coldStart={homepagePingColdStart}
               className="card-metric-section card-metric-divided"
             />
           ) : (

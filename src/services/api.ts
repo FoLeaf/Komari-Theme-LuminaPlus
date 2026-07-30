@@ -151,6 +151,21 @@ interface ApiCallOptions {
   skipMetricQuery?: boolean;
 }
 
+export interface PingOverviewOptions {
+  signal?: AbortSignal;
+  entityIds?: string[];
+  /**
+   * Homepage bars can derive last/max/loss from metric samples.
+   * Stats run multi-agg per node and are off by default to keep first paint light.
+   */
+  includeStats?: boolean;
+  /**
+   * Boundary repair needs an extra raw query. Homepage 24-bucket previews can
+   * tolerate small gaps, so it stays off by default.
+   */
+  repairBoundary?: boolean;
+}
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -919,7 +934,7 @@ export async function saveThemeSettings(
 export async function getPingOverview(
   hours = 1,
   taskId?: number,
-  options?: { signal?: AbortSignal; entityIds?: string[] },
+  options?: PingOverviewOptions,
 ): Promise<PingOverviewResponse> {
   const requestRange = createRequestRange(hours);
   try {
@@ -928,8 +943,8 @@ export async function getPingOverview(
       entityIds: options?.entityIds,
       taskId,
       maxPoints: OVERVIEW_METRIC_MAX_POINTS,
-      includeStats: true,
-      repairBoundary: true,
+      includeStats: options?.includeStats ?? false,
+      repairBoundary: options?.repairBoundary ?? false,
       signal: options?.signal,
     });
   } catch (error) {

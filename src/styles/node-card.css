@@ -516,6 +516,67 @@
   height: 9px;
 }
 
+
+/* 冷启动：固定三槽高度，轻量 pulse，避免 CLS；轮询后不再进入此态。 */
+.multi-ping-status.is-cold-start .multi-ping-metric-column {
+  /* large: name(~14) + gap + bars(11) + row gap ≈ 三行稳定高度 */
+  min-height: calc(3 * (14px + 3px + 11px) + 2 * 7px);
+}
+
+.multi-ping-status.is-compact.is-cold-start .multi-ping-metric-column {
+  min-height: calc(3 * (13px + 3px + 9px) + 2 * 6px);
+}
+
+.multi-ping-metric-row.is-pulse {
+  pointer-events: none;
+}
+
+.multi-ping-pulse-block {
+  display: block;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-tertiary) 28%, transparent);
+  animation: multi-ping-pulse 1.2s ease-in-out infinite;
+}
+
+.multi-ping-pulse-block.is-value {
+  width: 34px;
+  height: 11px;
+  margin-left: auto;
+}
+
+.multi-ping-name.multi-ping-pulse-block {
+  width: 42%;
+  max-width: 72px;
+  height: 10px;
+}
+
+.multi-ping-pulse-block.is-bars {
+  width: 100%;
+  height: 11px;
+  border-radius: 3px;
+}
+
+.multi-ping-pulse-block.is-bars.is-compact-bars {
+  height: 9px;
+}
+
+@keyframes multi-ping-pulse {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .multi-ping-pulse-block {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
 .server-health-block {
   display: flex;
   flex-direction: column;
