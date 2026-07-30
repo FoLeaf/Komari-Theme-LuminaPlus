@@ -1,9 +1,9 @@
 {
-  "name": "komari-theme-luminaPlus",
+  "name": "komari-theme-luminaPlus-19y",
   "private": true,
   "version": "1.2.6",
   "type": "module",
-  "description": "Komari-Theme-LuminaPlus",
+  "description": "Komari-Theme-LuminaPlus-19y",
   "author": "codex&shark&shanyang",
   "scripts": {
     "dev": "vite",

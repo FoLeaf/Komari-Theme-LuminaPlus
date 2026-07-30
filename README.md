@@ -1,4 +1,4 @@
-# Komari-Theme-LuminaPlus
+# Komari-Theme-LuminaPlus-19y
 
 由于项目在1.1.10版本更名 请大家**重新在komari添加一下新的主题仓库地址** 需要重新配置一下 带来不便请谅解，不好意思了铁铁们。一直以来，我都比较支持这样一个观点：**如果有比较特殊的需求，并且自己具备相关能力，最好可以进行二次开发** 原因主要有几点：
 
@@ -16,7 +16,7 @@
 ## 效果预览
 
 <p align="center">
-  <img src="docs/images/theme-preview.png" alt="Komari-Theme-LuminaPlus 综合预览" width="90%">
+  <img src="docs/images/theme-preview.png" alt="Komari-Theme-LuminaPlus-19y 综合预览" width="90%">
 </p>
 
 ### 首页总览与节点卡片
