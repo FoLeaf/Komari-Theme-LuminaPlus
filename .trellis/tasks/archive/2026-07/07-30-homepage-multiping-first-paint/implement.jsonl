@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend package entry and guideline index"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "Homepage ping store/hook conventions"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Module store + query patterns for overview cache"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "MultiPingStatus / node card UI patterns"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Test and performance expectations"}
