@@ -68,3 +68,26 @@ Shipped lean multi-task homepage ping batch (1 metric query, no stats/repair), c
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: Homepage and theme-manage first paint skeletons
+
+**Date**: 2026-07-30
+**Task**: Homepage and theme-manage first paint skeletons
+**Branch**: `main`
+
+### Summary
+
+Removed full-page spinners on home and theme-manage: fixed-N card placeholders, ThemeManageSkeleton for auth/lazy/config, optimistic store hydrate on public home. Rebranded theme id to LuminaPlus-19y. Specs updated. Not pushed this round.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9e2f0a` | (see git log) |
+| `fe4494f` | (see git log) |
+| `0524bc3` | (see git log) |
+
+### Status
+
+[OK] **Completed**
