@@ -53,6 +53,7 @@ These are load-bearing in production (many cards, 1s metrics ticks):
 8. **AbortSignal + timeouts** on API/RPC (`fetchWithTimeout`, overview timeout ~35s)
 9. Avoid work for hidden nodes (theme `hiddenNodes` filtered from overview)
 10. **Cold pulse once** — hydrate only after non-empty visible UUIDs; stable hydrate subscribe
+11. **Home first paint** — `AppShell` spinner is access-only; `NodeGrid` shows fixed-N light-pulse placeholders until hydrate (no full-page spin on store alone)
 
 If you add homepage data fetching, measure cost under multi-ping. Target: **1** overview query for three tasks, **0** stats, **0** boundary repair on the primary home path.
 
@@ -66,7 +67,7 @@ If you add homepage data fetching, measure cost under multi-ping. Target: **1** 
 - Query: limited retry; surface message in Theme Manage / auth gates
 - Ping overview: multi-batch or per-task `Promise.allSettled` style resilience; keep previous line on partial failure; cold empty →「无样本」, keep polling
 
-Never leave infinite spinners without a ready/error escape (`useThemeSettings.isReady` pattern).
+Never leave infinite spinners without a ready/error escape (`useThemeSettings.isReady` pattern). Prefer structural placeholders over a full-main spinner once access is allowed on home.
 
 ---
 
@@ -106,6 +107,7 @@ Skip narrating obvious assignments.
 - [ ] `npm test` (or targeted vitest for touched domain)
 - [ ] `npm run lint` if hooks/components changed
 - [ ] Homepage multi-ping path considered if touching `api.ts` / `usePingOverview` (1 batch, lean flags, cold hydrate rules)
+- [ ] Homepage shell/grid cold path considered if touching `AppShell` / `NodeGrid` (access-only spinner, fixed-N placeholders, `homeLayout.test.ts`)
 - [ ] No secret/token logging
 - [ ] Theme settings still normalize safely when fields missing
 

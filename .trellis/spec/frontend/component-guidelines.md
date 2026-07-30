@@ -119,6 +119,29 @@ Homepage multi-network (三网) block perception rules:
 
 ---
 
+## Theme manage cold skeleton
+
+Entry to `/?view=theme-manage` must not full-page spin:
+
+1. `AppShell` treats theme-manage like home for access spinner skip.
+2. `Home` auth-pending and `Suspense` (lazy chunk) use `ThemeManageSkeleton` (small module `ThemeManageSkeleton.tsx` — do not static-import full `ThemeManage` from Home).
+3. `ThemeManage` `configLoading` returns the same skeleton, not centered `Spinner`.
+4. Save button may still use a tiny inline spinner; section lists may keep compact loading — entry path is skeleton-first.
+
+---
+
+## Homepage cold grid placeholders (`NodeGrid`)
+
+When theme is ready and the node store is **not** hydrated (and no `nodeInfoError`):
+
+1. Paint structural home early: brand + optional overview **pulse shell** (not live zero-value overview numbers).
+2. Render **fixed N** presentational card shells for the current view mode (`HOME_PLACEHOLDER_COUNT`: large/compact **6**, mini/list **8`).
+3. Reuse existing loading shells with **reserved min-heights** (large ~438, compact ~284, mini ~228; dense overview cards ~88) — light `animate-pulse` only.
+4. After hydrate, replace with real visible UUID cards; empty real list uses the existing empty-state copy (not placeholders).
+5. No shimmer sweep, viewport lazy load, or virtual list on this path.
+
+---
+
 ## Anti-patterns
 
 - Reading `wsStore` directly from many leaf components (use hooks)
@@ -126,5 +149,7 @@ Homepage multi-network (三网) block perception rules:
 - Introducing a UI component library — this theme is hand-rolled
 - Giant page components that embed chart math (keep in `components/instance/chartData.ts` style modules)
 - Default-export components (named exports are the norm)
-- E-commerce style large gray skeleton + strong shimmer on homepage multi-ping
+- E-commerce style large gray skeleton + strong shimmer on homepage multi-ping **or** whole-home cold path
 - Pulse on every poll, or omitting fixed height for the three multi-ping rows
+- Full-main `Spinner` waiting solely on `wsStore.hydrated` before mounting home
+- Fake store UUIDs just to mount card models during cold start

@@ -52,6 +52,21 @@ React reads via `src/hooks/useNode.ts` only (or carefully through shared hooks).
 - Each card subscribes to its own uuid snapshots
 - Re-renders of one node should not rebuild all card models from a full array prop
 
+### Home shell vs store hydrate
+
+`AppShell` home dashboard path:
+
+- **Never** full-main `Spinner` for `publicConfig` pending, private auth pending, or `wsStore.hydrated`
+- Mount `<Outlet />` immediately → `NodeGrid` paints fixed-N light placeholders (theme defaults OK before config)
+- Access error / confirmed private visitor lock gate unchanged
+- Non-home data routes may still spinner on access pending
+
+`useNodeStoreStatus(canHydrateHome)` starts `retainStore` optimistically while config is pending (public path). Private sites only hydrate when logged in.
+
+Cold homepage paint is owned by `NodeGrid`: placeholders until `storeHydrated`, then real UUID cards. Never push fake UUIDs into `wsStore`. Do not `return null` waiting for `themeSettings.isReady`.
+
+`Home.tsx` keeps FloatingControls behind `homeReady = themeSettings.isReady && storeHydrated`.
+
 ---
 
 ## 3. Homepage ping overview store
