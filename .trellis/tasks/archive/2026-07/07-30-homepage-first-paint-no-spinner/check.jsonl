@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend quality entry"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Lint/test/CLS checklist"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Placeholder card UI review"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Shell vs store hydrate contracts"}

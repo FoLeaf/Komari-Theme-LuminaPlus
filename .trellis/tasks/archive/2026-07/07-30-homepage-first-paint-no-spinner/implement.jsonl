@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend package entry"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Card shells and multi-ping first-paint UI"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "wsStore hydrate and home overview store"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "CLS and homepage perf rules"}
