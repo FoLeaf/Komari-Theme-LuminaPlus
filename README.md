@@ -35,6 +35,8 @@
 1. 请使用完整主题包（`npm run package` 生成的 zip）导入，确保 `dist/icons/pwa-*.png` 与 `manifest.webmanifest` 一并覆盖。
 2. 更新主题后若安装图标仍是旧图：在浏览器 **注销 Service Worker、清空该站 Cache**，卸载旧 PWA 后再安装。
 3. 离线不伪造实时数据；恢复网络后会回到 live 同步。主题管理等写操作仍需联网。
+4. Service Worker **不会**接管 `/admin`、`/terminal`、`/api` 等 Komari 后端路径（`navigateFallbackDenylist`）。若更新 PWA 后曾无法打开后台，多半是旧 SW 把 `/admin` 回退成了主题首页——注销 SW 并部署含 denylist 的新包即可。
+5. 若站点前有 **Cloudflare Rocket Loader**，可能改写 `type="module"` 导致管理端脚本不执行；建议对该站关闭 Rocket Loader。
 
 ---
 

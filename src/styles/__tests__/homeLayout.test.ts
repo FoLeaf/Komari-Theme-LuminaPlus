@@ -127,6 +127,8 @@ describe("home responsive layout contracts", () => {
     expect(viteConfig).toContain("vite-plugin-pwa");
     expect(viteConfig).toContain("VitePWA");
     expect(viteConfig).toContain('handler: "NetworkOnly"');
+    expect(viteConfig).toContain("navigateFallbackDenylist");
+    expect(viteConfig).toContain("/^\\/admin(?:\\/|$)/");
     expect(viteConfig).toContain('registerType: "autoUpdate"');
     expect(viteConfig).toContain("/icons/pwa-192x192.png");
     expect(viteConfig).toContain("/icons/pwa-512x512-maskable.png");

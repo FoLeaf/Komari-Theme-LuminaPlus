@@ -65,21 +65,48 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: "/index.html",
+        // Komari 后端自有页面/API：绝不能被主题 SPA shell 接管，否则 /admin 会变成主题 404。
+        navigateFallbackDenylist: [
+          /^\/admin(?:\/|$)/,
+          /^\/terminal(?:\/|$)/,
+          /^\/api(?:\/|$)/,
+          /^\/rpc(?:\/|$)/,
+          /^\/data(?:\/|$)/,
+          /^\/themes(?:\/|$)/,
+          /^\/sw\.js$/,
+          /^\/workbox-.*\.js$/,
+          /^\/registerSW\.js$/,
+        ],
         // 国旗 SVG 数量大，不进 precache；走下方 runtime image 缓存。
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff2,webmanifest}"],
         globIgnores: ["**/assets/flags/**"],
         runtimeCaching: [
           {
-            urlPattern: ({ url }) => url.pathname.startsWith("/api/"),
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith("/api/") ||
+              url.pathname.startsWith("/rpc") ||
+              url.pathname.startsWith("/admin") ||
+              url.pathname.startsWith("/terminal"),
             handler: "NetworkOnly",
           },
           {
-            urlPattern: ({ request }) =>
-              request.destination === "style" ||
-              request.destination === "script" ||
-              request.destination === "worker" ||
-              request.destination === "font" ||
-              request.destination === "image",
+            urlPattern: ({ request, url }) => {
+              // 勿把管理端/接口响应塞进静态 runtime 缓存。
+              if (
+                url.pathname.startsWith("/api/") ||
+                url.pathname.startsWith("/admin") ||
+                url.pathname.startsWith("/terminal")
+              ) {
+                return false;
+              }
+              return (
+                request.destination === "style" ||
+                request.destination === "script" ||
+                request.destination === "worker" ||
+                request.destination === "font" ||
+                request.destination === "image"
+              );
+            },
             handler: "StaleWhileRevalidate",
             options: {
               cacheName: "static-runtime",
