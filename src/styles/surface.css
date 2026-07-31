@@ -153,6 +153,69 @@ body::after {
   padding-top: calc(env(safe-area-inset-top, 0px) + 1.25rem);
 }
 
+.offline-banner {
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  animation: offline-banner-in 200ms ease-out;
+}
+
+.offline-banner-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-elev-a, var(--surface-elev)) 92%, transparent);
+  padding: 0.55rem 0.85rem;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.offline-banner-title {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.offline-banner-detail {
+  color: var(--text-tertiary);
+}
+
+.route-transition {
+  animation: route-enter 200ms ease-out;
+}
+
+@keyframes offline-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes route-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .offline-banner,
+  .route-transition {
+    animation: none;
+  }
+}
+
 .floating-controls {
   position: absolute;
   top: -14px;

@@ -133,7 +133,9 @@ const EMPTY_STORE_STATUS = {
   failureStreak: 0,
   hydrated: false,
   nodeInfoError: false,
-} as const;
+  dataSource: "none" as const,
+  cacheSavedAt: null,
+};
 
 export function useNodeStoreStatus(enabled = true) {
   useEnsured(enabled);

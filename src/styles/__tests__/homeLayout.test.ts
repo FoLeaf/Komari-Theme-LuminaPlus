@@ -106,11 +106,41 @@ describe("home responsive layout contracts", () => {
     expect(appShellSource).toContain("isHomeDashboard || isThemeManageView || isInstanceRoute");
     expect(appShellSource).toContain("!skipAccessSpinner && isCheckingAccess");
     expect(appShellSource).toMatch(/canHydrateNodes[\s\S]*!isPrivateSite \|\| loggedIn/);
+    expect(appShellSource).toContain('normalizedPath === "/assets"');
+    expect(appShellSource).toContain('normalizedPath === "/traffic"');
+    expect(appShellSource).toContain("OfflineBanner");
+    expect(appShellSource).toContain("route-transition");
     // Home is eager — no route-level Spinner while Home chunk loads on cold cache.
     expect(routerSource).toContain('import { Home } from "@/pages/Home"');
     expect(routerSource).not.toMatch(/const Home(?:Page)?\s*=\s*lazy/);
     expect(routerSource).toContain("element: <Home />");
     expect(routerSource).toContain("InstancePageSkeleton");
+  });
+
+  it("wires PWA offline shell contracts", () => {
+    const viteConfig = readFileSync(new URL("../../../vite.config.ts", import.meta.url), "utf8");
+    const indexHtml = readFileSync(new URL("../../../index.html", import.meta.url), "utf8");
+    const offlineDb = readFileSync(
+      new URL("../../services/offlineDb.ts", import.meta.url),
+      "utf8",
+    );
+    expect(viteConfig).toContain("vite-plugin-pwa");
+    expect(viteConfig).toContain("VitePWA");
+    expect(viteConfig).toContain('handler: "NetworkOnly"');
+    expect(viteConfig).toContain('registerType: "autoUpdate"');
+    expect(viteConfig).toContain("/icons/pwa-192x192.png");
+    expect(viteConfig).toContain("/icons/pwa-512x512-maskable.png");
+    expect(viteConfig).toContain('purpose: "maskable"');
+    expect(viteConfig).toContain("favicon.ico");
+    expect(indexHtml).toContain('href="/favicon.ico"');
+    expect(indexHtml).toContain("/icons/apple-touch-icon.png");
+    expect(indexHtml).toContain("/icons/pwa-192x192.png");
+    // Manifest install icons must be PNG paths, not src favicon.ico (ICO mis-parse → solid blob).
+    expect(viteConfig).not.toMatch(/src:\s*["'][^"']*favicon\.ico["']/);
+    expect(offlineDb).toContain("komari-theme-offline");
+    expect(surfaceCss).toContain("prefers-reduced-motion");
+    expect(surfaceCss).toContain(".route-transition");
+    expect(surfaceCss).toContain(".offline-banner");
   });
 
   it("uses ThemeManageSkeleton instead of full-page spinners on theme-manage entry", () => {

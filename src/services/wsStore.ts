@@ -1,5 +1,12 @@
 import type { NodeInfo, NodeMetrics, NodeRealtime, TrafficTrendSample } from "@/types/komari";
 import { getNodes, getNodesLatestStatus } from "@/services/api";
+import {
+  loadHomeSnapshot,
+  saveHomeSnapshot,
+  type HomeOfflineSnapshot,
+  type OfflineDataSource,
+  OFFLINE_SNAPSHOT_VERSION,
+} from "@/services/offlineDb";
 
 type Listener = () => void;
 type RealtimePayload = Record<string, unknown>;
@@ -16,6 +23,8 @@ export interface StoreStatusSnapshot {
   failureStreak: number;
   hydrated: boolean;
   nodeInfoError: boolean;
+  dataSource: OfflineDataSource;
+  cacheSavedAt: number | null;
 }
 
 export interface HomeNodeSummary {
@@ -371,7 +380,13 @@ let storeStatusSnapshot: StoreStatusSnapshot = {
   failureStreak: 0,
   hydrated: false,
   nodeInfoError: false,
+  dataSource: "none",
+  cacheSavedAt: null,
 };
+let dataSource: OfflineDataSource = "none";
+let cacheSavedAt: number | null = null;
+let persistHomeTimer: number | null = null;
+const HOME_PERSIST_DEBOUNCE_MS = 3_000;
 let scrollIdleTimer: number | null = null;
 let scrollTrackingStarted = false;
 let scrollActive = false;
@@ -677,6 +692,75 @@ let nodeInfoPromise: Promise<void> | null = null;
 let liveStatusController: AbortController | null = null;
 let nodeInfoController: AbortController | null = null;
 
+function markLiveDataSource() {
+  if (dataSource === "live") return false;
+  dataSource = "live";
+  return true;
+}
+
+function schedulePersistHome() {
+  if (typeof window === "undefined") return;
+  if (persistHomeTimer != null) {
+    window.clearTimeout(persistHomeTimer);
+  }
+  persistHomeTimer = window.setTimeout(() => {
+    persistHomeTimer = null;
+    void persistHomeSnapshotNow();
+  }, HOME_PERSIST_DEBOUNCE_MS);
+}
+
+async function persistHomeSnapshotNow() {
+  if (!hydrated || state.order.length === 0) return;
+  const snapshot: HomeOfflineSnapshot = {
+    version: OFFLINE_SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    order: [...state.order],
+    metaByUuid: { ...state.metaByUuid },
+    metricsByUuid: { ...state.metricsByUuid },
+  };
+  try {
+    await saveHomeSnapshot(snapshot);
+    cacheSavedAt = snapshot.savedAt;
+    commit(state, { storeStatus: true });
+  } catch {
+    // 持久化失败不影响 live 路径。
+  }
+}
+
+function applyHomeSnapshot(snapshot: HomeOfflineSnapshot) {
+  const trafficTrends = Object.fromEntries(
+    snapshot.order.map((uuid) => [uuid, state.trafficTrends[uuid] ?? EMPTY_TRAFFIC_TREND]),
+  );
+  hydrated = true;
+  nodeInfoError = false;
+  dataSource = "cache";
+  cacheSavedAt = snapshot.savedAt;
+  commit(
+    {
+      order: snapshot.order,
+      metaByUuid: snapshot.metaByUuid,
+      metricsByUuid: snapshot.metricsByUuid,
+      trafficTrends,
+      failureStreak: state.failureStreak,
+    },
+    {
+      meta: snapshot.order,
+      metrics: snapshot.order,
+      nodeList: true,
+      allNodes: true,
+      storeStatus: true,
+    },
+  );
+}
+
+async function tryHydrateFromCache(): Promise<boolean> {
+  if (hydrated && dataSource === "live") return false;
+  const snapshot = await loadHomeSnapshot();
+  if (!snapshot || snapshot.order.length === 0) return false;
+  applyHomeSnapshot(snapshot);
+  return true;
+}
+
 function sortNodes(nodes: NodeInfo[]) {
   return [...nodes].sort((left, right) => left.weight - right.weight);
 }
@@ -742,7 +826,8 @@ async function performNodeInfoSync() {
         return Boolean(prev?.hidden) !== Boolean(next?.hidden);
       });
 
-    const storeStatusChanged = !hydrated || nodeInfoError;
+    const sourceChanged = markLiveDataSource();
+    const storeStatusChanged = !hydrated || nodeInfoError || sourceChanged;
     hydrated = true;
     nodeInfoError = false;
     if (orderChanged || touchedMeta.size > 0 || touchedMetrics.size > 0 || storeStatusChanged) {
@@ -764,6 +849,7 @@ async function performNodeInfoSync() {
         },
       );
     }
+    schedulePersistHome();
   } catch (error) {
     if (!controller.signal.aborted && !nodeInfoError) {
       nodeInfoError = true;
@@ -794,7 +880,8 @@ async function refreshLatestStatus() {
     const applied = applyLatestStatus(records);
     const metricsChanged = applied.touchedMetrics.length > 0;
     const trafficTrendsChanged = applied.touchedTrafficTrends.length > 0;
-    const storeStatusChanged = state.failureStreak > 0;
+    const sourceChanged = markLiveDataSource();
+    const storeStatusChanged = state.failureStreak > 0 || sourceChanged;
 
     if (metricsChanged || trafficTrendsChanged || storeStatusChanged) {
       commit(
@@ -812,6 +899,9 @@ async function refreshLatestStatus() {
         },
       );
     }
+    if (metricsChanged || sourceChanged) {
+      schedulePersistHome();
+    }
   } catch {
     if (controller.signal.aborted) return;
     commit(
@@ -828,10 +918,18 @@ async function refreshLatestStatus() {
 }
 
 async function bootstrap() {
+  const offline =
+    typeof navigator !== "undefined" && navigator.onLine === false;
+  if (offline) {
+    await tryHydrateFromCache();
+  }
   try {
     await syncNodeInfo();
     await refreshLatestStatus();
   } catch {
+    if (!hydrated || dataSource !== "live") {
+      await tryHydrateFromCache();
+    }
     // 下一个调度 tick 再重试。
   }
 }
@@ -909,8 +1007,14 @@ function stopStore() {
   }
   scrollActive = false;
   refreshDeferredWhileScrolling = false;
+  if (persistHomeTimer != null) {
+    window.clearTimeout(persistHomeTimer);
+    persistHomeTimer = null;
+  }
   hydrated = false;
   nodeInfoError = false;
+  dataSource = "none";
+  // cacheSavedAt 保留，便于下次 banner 仍能显示“截至”时间。
   started = false;
 }
 
@@ -977,7 +1081,9 @@ export function getStoreStatusSnapshot(): StoreStatusSnapshot {
   if (
     storeStatusSnapshot.failureStreak === state.failureStreak &&
     storeStatusSnapshot.hydrated === hydrated &&
-    storeStatusSnapshot.nodeInfoError === nodeInfoError
+    storeStatusSnapshot.nodeInfoError === nodeInfoError &&
+    storeStatusSnapshot.dataSource === dataSource &&
+    storeStatusSnapshot.cacheSavedAt === cacheSavedAt
   ) {
     return storeStatusSnapshot;
   }
@@ -985,6 +1091,8 @@ export function getStoreStatusSnapshot(): StoreStatusSnapshot {
     failureStreak: state.failureStreak,
     hydrated,
     nodeInfoError,
+    dataSource,
+    cacheSavedAt,
   };
   return storeStatusSnapshot;
 }

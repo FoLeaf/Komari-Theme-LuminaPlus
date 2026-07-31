@@ -105,8 +105,12 @@ export function Instance() {
   if (!uuid) return null;
 
   if (!meta) {
+    const offlineCacheMiss =
+      storeStatus.hydrated && storeStatus.dataSource === "cache";
     const message = storeStatus.hydrated
-      ? "找不到这个实例，它可能已被删除或链接无效。"
+      ? offlineCacheMiss
+        ? "该实例尚无离线缓存，请联网后打开一次。"
+        : "找不到这个实例，它可能已被删除或链接无效。"
       : storeStatus.nodeInfoError
         ? "节点列表加载失败，系统正在自动重试。"
         : null;
@@ -122,7 +126,11 @@ export function Instance() {
         </Link>
         <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
           <div className="text-[15px] font-semibold text-[var(--text-primary)]">
-            {storeStatus.hydrated ? "实例不存在" : "暂时无法加载实例"}
+            {offlineCacheMiss
+              ? "暂无离线数据"
+              : storeStatus.hydrated
+                ? "实例不存在"
+                : "暂时无法加载实例"}
           </div>
           <p className="text-[13px] text-[var(--text-secondary)]">{message}</p>
         </div>

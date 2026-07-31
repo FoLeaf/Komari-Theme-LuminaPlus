@@ -207,16 +207,24 @@ export function Traffic() {
       {nodes.length === 0 ? (
         <div className="flex h-[40vh] flex-col items-center justify-center gap-2 text-[var(--text-tertiary)]">
           <span className="text-[15px]">暂无节点数据</span>
-          <span className="text-[12px]">等待后端推送或前往管理后台添加</span>
+          <span className="text-[12px]">
+            {typeof navigator !== "undefined" && navigator.onLine === false
+              ? "离线且无节点缓存，请联网后打开首页同步一次"
+              : "等待后端推送或前往管理后台添加"}
+          </span>
         </div>
-      ) : trafficQuery.isPending ? (
+      ) : trafficQuery.isPending && !trafficQuery.data ? (
         <div className="flex h-[40vh] items-center justify-center">
           <Spinner size={24} />
         </div>
-      ) : trafficQuery.isError ? (
+      ) : trafficQuery.isError && !trafficQuery.data ? (
         <section className="traffic-error" role="alert">
           <strong>无法读取今日流量统计</strong>
-          <span>请检查网络或历史记录配置后重试。</span>
+          <span>
+            {typeof navigator !== "undefined" && navigator.onLine === false
+              ? "离线且无流量缓存，请联网后打开本页一次。"
+              : "请检查网络或历史记录配置后重试。"}
+          </span>
           <button type="button" onClick={() => void trafficQuery.refetch()}>
             重新加载
           </button>

@@ -1,9 +1,11 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Lock } from "lucide-react";
 import { BackgroundLayer } from "./BackgroundLayer";
+import { OfflineBanner } from "./OfflineBanner";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAppearance } from "@/hooks/useAppearance";
 import { useAuth } from "@/hooks/useAuth";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { usePublicConfig } from "@/hooks/usePublicConfig";
 import { useSiteMetadata } from "@/hooks/useSiteMetadata";
 import { useMetricColorsSync } from "@/hooks/useMetricColors";
@@ -14,6 +16,7 @@ export function AppShell() {
   useSiteMetadata();
   useMetricColorsSync();
   const { pathname, search } = useLocation();
+  const online = useOnlineStatus();
   const publicConfig = usePublicConfig();
   const auth = useAuth();
   const normalizedPath = (pathname.replace(/\/+$/, "") || "/").toLowerCase();
@@ -47,14 +50,20 @@ export function AppShell() {
 
   // config 未到时乐观开 hydrate（公开站主路径）。
   // 私有站仅登录后拉节点，避免未授权请求。
+  // Assets/Traffic 也 hydrate，便于离线读节点列表与横幅状态。
   const canHydrateNodes =
-    (isHomeDashboard || isInstanceRoute) &&
+    (isHomeDashboard ||
+      isInstanceRoute ||
+      normalizedPath === "/assets" ||
+      normalizedPath === "/traffic") &&
     !accessError &&
     (!isPrivateSite || loggedIn);
 
-  useNodeStoreStatus(canHydrateNodes);
+  const storeStatus = useNodeStoreStatus(canHydrateNodes);
 
   const showOutlet = !accessError && !isPrivateVisitor && !blockWithSpinner;
+  // pathname only：避免 search 变化（theme-manage）触发整页过渡。
+  const routeKey = normalizedPath;
 
   return (
     <div className="relative flex min-h-screen flex-col">
@@ -66,11 +75,25 @@ export function AppShell() {
               <Spinner size={24} />
             </div>
           ) : accessError ? (
-            <AccessError onRetry={() => void publicConfig.refetch()} />
+            <AccessError
+              online={online}
+              hasCachedPublic={Boolean(publicConfig.data)}
+              onRetry={() => void publicConfig.refetch()}
+            />
           ) : isPrivateVisitor ? (
             <PrivateSiteGate />
           ) : showOutlet ? (
-            <Outlet />
+            <>
+              <OfflineBanner
+                online={online}
+                dataSource={storeStatus.dataSource}
+                cacheSavedAt={storeStatus.cacheSavedAt}
+                failureStreak={storeStatus.failureStreak}
+              />
+              <div key={routeKey} className="route-transition">
+                <Outlet />
+              </div>
+            </>
           ) : null}
         </div>
       </main>
@@ -78,14 +101,28 @@ export function AppShell() {
   );
 }
 
-function AccessError({ onRetry }: { onRetry: () => void }) {
+function AccessError({
+  onRetry,
+  online,
+  hasCachedPublic,
+}: {
+  onRetry: () => void;
+  online: boolean;
+  hasCachedPublic: boolean;
+}) {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
       <div className="space-y-2">
         <div className="text-[15px] font-semibold text-[var(--text-primary)]">
-          无法读取站点配置
+          {online ? "无法读取站点配置" : "当前离线且无可用配置缓存"}
         </div>
-        <p className="text-[13px] text-[var(--text-secondary)]">请检查网络后重试。</p>
+        <p className="text-[13px] text-[var(--text-secondary)]">
+          {hasCachedPublic
+            ? "请检查网络后重试。"
+            : online
+              ? "请检查网络后重试。"
+              : "联网成功后将自动恢复。"}
+        </p>
       </div>
       <button type="button" onClick={onRetry} className="control-button px-4 py-2 text-[13px] font-medium">
         重试
