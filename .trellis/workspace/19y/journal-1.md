@@ -112,3 +112,24 @@ Implemented Vite optimizations, lazy loading for Home/Traffic, React.memo on cri
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Session: spinner-to-skeleton home and instance charts
+
+**Date**: 2026-07-31
+**Task**: Session: spinner-to-skeleton home and instance charts
+**Branch**: `main`
+
+### Summary
+
+Replaced remaining home cold-cache and instance chart/time-window spinners with light-pulse skeletons. Eager Home import; InstancePageSkeleton + ChartSkeletonBody; AppShell skipAccessSpinner for instance routes. Work commit 5ac27fe.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ac27fe` | (see git log) |
+
+### Status
+
+[OK] **Completed**
