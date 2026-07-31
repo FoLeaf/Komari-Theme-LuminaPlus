@@ -133,3 +133,25 @@ Replaced remaining home cold-cache and instance chart/time-window spinners with 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: PWA offline shell and admin SW fix
+
+**Date**: 2026-07-31
+**Task**: PWA offline shell and admin SW fix
+**Branch**: `main`
+
+### Summary
+
+Shipped installable PWA with selective offline snapshots (home/instance/assets/traffic), unified app icons, README updates; diagnosed /admin broken by SW navigateFallback and added denylist for Komari backend paths; packaged and pushed to upstream.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1289aee` | (see git log) |
+| `449deeb` | (see git log) |
+
+### Status
+
+[OK] **Completed**

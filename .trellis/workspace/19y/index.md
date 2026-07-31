@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-07-31
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~135 | Active |
+| `journal-1.md` | ~157 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-07-31 | PWA offline shell and admin SW fix | `1289aee`, `449deeb` | `main` |
 | 5 | 2026-07-31 | Session: spinner-to-skeleton home and instance charts | `5ac27fe` | `main` |
 | 4 | 2026-07-30 | Session: homepage-first-paint-no-spinner + first-time page load perf | `330a042` | `main` |
 | 3 | 2026-07-30 | Homepage and theme-manage first paint skeletons | `a9e2f0a`, `fe4494f`, `0524bc3` | `main` |
