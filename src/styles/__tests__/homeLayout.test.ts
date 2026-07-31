@@ -167,6 +167,21 @@ describe("home responsive layout contracts", () => {
     );
   });
 
+  it("uses contrast-safe skeleton bones (not white-on-white in light mode)", () => {
+    const tokensCss = readFileSync(new URL("../tokens.css", import.meta.url), "utf8");
+    const chartSkeletonSource = readFileSync(
+      new URL("../../components/instance/ChartSkeletonBody.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(tokensCss).toContain("--skeleton-bone");
+    expect(surfaceCss).toContain(".skeleton-bone");
+    expect(surfaceCss).toMatch(
+      /\.instance-chart-skeleton-plot[\s\S]*background:\s*var\(--skeleton-bone\)/,
+    );
+    expect(chartSkeletonSource).toContain("skeleton-bone");
+    expect(chartSkeletonSource).not.toContain("bg-[var(--surface-elev)]");
+  });
+
   it("uses instance page and chart skeletons instead of Spinner waits", () => {
     const instanceSource = readFileSync(
       new URL("../../pages/Instance.tsx", import.meta.url),

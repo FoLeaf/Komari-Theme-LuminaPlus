@@ -10,6 +10,8 @@
   --surface: #ffffff;
   --surface-elev: #ffffff;
   --surface-sunken: #f4f4f5;
+  /* 骨架骨块：亮色下 elev===surface(#fff)，不能再用 elev 当 bone，否则白上白不可见。 */
+  --skeleton-bone: color-mix(in srgb, var(--text-primary) 8%, var(--surface));
 
   --border: rgba(24, 24, 27, 0.08);
   --border-subtle: rgba(24, 24, 27, 0.06);
@@ -95,6 +97,8 @@
   --surface: color-mix(in srgb, #262c36, #080a0d calc(var(--dark-depth, 0) * 1%));
   --surface-elev: color-mix(in srgb, #2a313c, #101318 calc(var(--dark-depth, 0) * 1%));
   --surface-sunken: color-mix(in srgb, #151b23, #030405 calc(var(--dark-depth, 0) * 1%));
+  /* 暗色：略亮于 surface 的骨块，pulse 时仍可辨。 */
+  --skeleton-bone: color-mix(in srgb, var(--text-primary) 10%, var(--surface));
 
   --border: color-mix(in srgb, #3d444d, #2d333b calc(var(--dark-depth, 0) * 1%));
   --border-subtle: color-mix(in srgb, rgba(61, 68, 77, 0.7), rgba(45, 51, 59, 0.72) calc(var(--dark-depth, 0) * 1%));

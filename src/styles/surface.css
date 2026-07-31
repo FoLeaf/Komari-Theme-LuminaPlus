@@ -1604,6 +1604,11 @@ body::after {
   font-size: 13px;
 }
 
+/* 骨架骨块：用 --skeleton-bone，避免亮色 elev===surface 时白上白。 */
+.skeleton-bone {
+  background-color: var(--skeleton-bone);
+}
+
 /* 图表加载态:轻量 pulse 骨架,固定几何,禁止居中 Spinner。 */
 .instance-chart-loading {
   display: flex;
@@ -1638,7 +1643,7 @@ body::after {
   flex: 1;
   min-height: 200px;
   border-radius: 14px;
-  background: var(--surface-elev);
+  background: var(--skeleton-bone);
 }
 
 .instance-chart-skeleton-legend {
