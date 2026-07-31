@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { clsx } from "clsx";
-import { Spinner } from "@/components/ui/Spinner";
+import { ChartSkeletonBody } from "./ChartSkeletonBody";
 
 export function InstancePanel({
   title,
@@ -37,12 +37,13 @@ export function InstancePanel({
   );
 }
 
+/** Chart wait state: light-pulse plot skeleton — no Spinner. */
 export function InstanceChartLoading({ title }: { title: string }) {
   return (
-    <InstancePanel title={title}>
-      <div className="instance-chart-loading" aria-busy>
-        <Spinner size={26} label="" />
-        <span>加载中…</span>
+    <InstancePanel title={title} className="instance-chart-panel">
+      <div className="instance-chart-loading is-skeleton" aria-busy>
+        <span className="sr-only">图表加载中</span>
+        <ChartSkeletonBody />
       </div>
     </InstancePanel>
   );

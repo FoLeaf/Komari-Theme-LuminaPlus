@@ -1541,16 +1541,48 @@ body::after {
   font-size: 13px;
 }
 
-/* 图表加载态:居中转圈 + 文案,明确告诉用户在加载而非卡死。 */
+/* 图表加载态:轻量 pulse 骨架,固定几何,禁止居中 Spinner。 */
 .instance-chart-loading {
   display: flex;
   min-height: 260px;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: 12px;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+.instance-chart-loading.is-skeleton {
+  justify-content: stretch;
+  align-items: stretch;
+}
+
+.instance-chart-skeleton {
+  display: flex;
+  min-height: 260px;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.instance-chart-skeleton-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding-inline: 2px;
+}
+
+.instance-chart-skeleton-plot {
+  flex: 1;
+  min-height: 200px;
+  border-radius: 14px;
+  background: var(--surface-elev);
+}
+
+.instance-chart-skeleton-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding-inline: 2px;
 }
 
 @media (max-width: 720px) {

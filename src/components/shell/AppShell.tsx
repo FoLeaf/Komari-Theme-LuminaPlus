@@ -25,14 +25,16 @@ export function AppShell() {
   const view = new URLSearchParams(search).get("view");
   const isThemeManageView = normalizedPath === "/" && view === "theme-manage";
   const isHomeDashboard = normalizedPath === "/" && !isThemeManageView;
-  // 首页与主题设置：等待期画骨架，不全屏 Spinner。
-  const skipAccessSpinner = isHomeDashboard || isThemeManageView;
+  const isInstanceRoute = normalizedPath.startsWith("/instance/");
+  // 首页 / 主题设置 / 节点详情：等待期画骨架，不全屏 Spinner。
+  const skipAccessSpinner =
+    isHomeDashboard || isThemeManageView || isInstanceRoute;
 
   const accessError = isDataRoute && publicConfig.isError && !publicConfig.data;
   const isPrivateSite = publicConfig.data?.private_site === true;
   const authPending = auth.isPending;
   const loggedIn = auth.data?.logged_in === true;
-  // 已确认私有且未登录：锁站。auth 未决时不落锁，首页/主题设置改画骨架。
+  // 已确认私有且未登录：锁站。auth 未决时不落锁，骨架页先画。
   const isPrivateVisitor =
     isDataRoute && isPrivateSite && !authPending && !loggedIn;
 
@@ -40,15 +42,17 @@ export function AppShell() {
     isDataRoute &&
     (publicConfig.isPending || (isPrivateSite && authPending));
 
-  // 其它数据页：仍用 access spinner（Assets/Instance 等本轮不动）。
+  // Assets / Traffic 等仍用 access spinner；home / theme-manage / instance 跳过。
   const blockWithSpinner = isDataRoute && !skipAccessSpinner && isCheckingAccess;
 
   // config 未到时乐观开 hydrate（公开站主路径）。
-  // 私有站仅登录后拉节点，避免未授权请求；等 auth 期间首页仍只画占位。
-  const canHydrateHome =
-    isHomeDashboard && !accessError && (!isPrivateSite || loggedIn);
+  // 私有站仅登录后拉节点，避免未授权请求。
+  const canHydrateNodes =
+    (isHomeDashboard || isInstanceRoute) &&
+    !accessError &&
+    (!isPrivateSite || loggedIn);
 
-  useNodeStoreStatus(canHydrateHome);
+  useNodeStoreStatus(canHydrateNodes);
 
   const showOutlet = !accessError && !isPrivateVisitor && !blockWithSpinner;
 

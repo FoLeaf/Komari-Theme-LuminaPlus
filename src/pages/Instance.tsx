@@ -3,9 +3,9 @@ import { useParams, Link } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import "uplot/dist/uPlot.min.css";
 import { InstanceDetails } from "@/components/instance/InstanceDetails";
+import { InstancePageSkeleton } from "@/components/instance/InstancePageSkeleton";
 import { PingChart } from "@/components/instance/PingChart";
 import { LoadChart } from "@/components/instance/LoadChart";
-import { Spinner } from "@/components/ui/Spinner";
 import {
   buildLoadTimeRangeOptions,
   buildPingTimeRangeOptions,
@@ -110,6 +110,10 @@ export function Instance() {
       : storeStatus.nodeInfoError
         ? "节点列表加载失败，系统正在自动重试。"
         : null;
+    if (!message) {
+      // Meta not ready yet: structural skeleton, not Spinner.
+      return <InstancePageSkeleton />;
+    }
     return (
       <div className="flex flex-col gap-5 py-2">
         <Link to="/" className="instance-page-back">
@@ -117,16 +121,10 @@ export function Instance() {
           返回
         </Link>
         <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
-          {message ? (
-            <>
-              <div className="text-[15px] font-semibold text-[var(--text-primary)]">
-                {storeStatus.hydrated ? "实例不存在" : "暂时无法加载实例"}
-              </div>
-              <p className="text-[13px] text-[var(--text-secondary)]">{message}</p>
-            </>
-          ) : (
-            <Spinner size={24} label="正在加载实例" />
-          )}
+          <div className="text-[15px] font-semibold text-[var(--text-primary)]">
+            {storeStatus.hydrated ? "实例不存在" : "暂时无法加载实例"}
+          </div>
+          <p className="text-[13px] text-[var(--text-secondary)]">{message}</p>
         </div>
       </div>
     );

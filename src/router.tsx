@@ -4,6 +4,8 @@ import { AppShell } from "@/components/shell/AppShell";
 import { RouteErrorFallback } from "@/components/shell/ErrorBoundary";
 import { Spinner } from "@/components/ui/Spinner";
 import { loadAssetsPage } from "@/services/assetsPageLoader";
+import { Home } from "@/pages/Home";
+import { InstancePageSkeleton } from "@/components/instance/InstancePageSkeleton";
 
 const Instance = lazy(() =>
   import("@/pages/Instance").then((m) => ({ default: m.Instance })),
@@ -13,10 +15,6 @@ const Assets = lazy(() =>
 );
 const NotFound = lazy(() =>
   import("@/pages/NotFound").then((m) => ({ default: m.NotFound })),
-);
-
-const HomePage = lazy(() =>
-  import("@/pages/Home").then((m) => ({ default: m.Home })),
 );
 const TrafficPage = lazy(() =>
   import("@/pages/Traffic").then((m) => ({ default: m.Traffic })),
@@ -30,8 +28,10 @@ function LoadingFallback() {
   );
 }
 
-function suspended(page: ReactNode) {
-  return <Suspense fallback={<LoadingFallback />}>{page}</Suspense>;
+function suspended(page: ReactNode, fallback?: ReactNode) {
+  return (
+    <Suspense fallback={fallback ?? <LoadingFallback />}>{page}</Suspense>
+  );
 }
 
 export const router = createBrowserRouter([
@@ -42,11 +42,13 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: suspended(<HomePage />),
+        // Home is the primary cold-entry surface: eager import so first paint
+        // is NodeGrid skeleton, never route-level Spinner while the chunk loads.
+        element: <Home />,
       },
       {
         path: "instance/:uuid",
-        element: suspended(<Instance />),
+        element: suspended(<Instance />, <InstancePageSkeleton />),
       },
       {
         path: "assets",

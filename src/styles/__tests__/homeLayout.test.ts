@@ -98,17 +98,19 @@ describe("home responsive layout contracts", () => {
     expect(homeSource).toContain("{homeReady && <FloatingControls");
   });
 
-  it("never full-page spins home or theme-manage while still gating other data routes", () => {
-    expect(appShellSource).toContain("useNodeStoreStatus(canHydrateHome)");
+  it("never full-page spins home, theme-manage, or instance while still gating other data routes", () => {
+    expect(appShellSource).toContain("useNodeStoreStatus(canHydrateNodes)");
     expect(appShellSource).not.toContain("isCheckingHomeData");
-    // 首页 + 主题设置不因 publicConfig pending 挡 Outlet；其它数据页仍可 access spinner。
+    // 首页 + 主题设置 + 节点详情不因 publicConfig pending 挡 Outlet；Assets/Traffic 仍可 access spinner。
     expect(appShellSource).toContain("skipAccessSpinner");
-    expect(appShellSource).toContain("isHomeDashboard || isThemeManageView");
+    expect(appShellSource).toContain("isHomeDashboard || isThemeManageView || isInstanceRoute");
     expect(appShellSource).toContain("!skipAccessSpinner && isCheckingAccess");
-    expect(appShellSource).toMatch(/canHydrateHome[\s\S]*!isPrivateSite \|\| loggedIn/);
+    expect(appShellSource).toMatch(/canHydrateNodes[\s\S]*!isPrivateSite \|\| loggedIn/);
+    // Home is eager — no route-level Spinner while Home chunk loads on cold cache.
     expect(routerSource).toContain('import { Home } from "@/pages/Home"');
-    expect(routerSource).not.toMatch(/const Home\s*=\s*lazy/);
+    expect(routerSource).not.toMatch(/const Home(?:Page)?\s*=\s*lazy/);
     expect(routerSource).toContain("element: <Home />");
+    expect(routerSource).toContain("InstancePageSkeleton");
   });
 
   it("uses ThemeManageSkeleton instead of full-page spinners on theme-manage entry", () => {
@@ -124,11 +126,42 @@ describe("home responsive layout contracts", () => {
       new URL("../../pages/ThemeManage.tsx", import.meta.url),
       "utf8",
     );
-    expect(skeletonSource).toContain("export function ThemeManageSkeleton");
+    expect(skeletonSource).toMatch(/ThemeManageSkeleton/);
     expect(skeletonSource).toContain("data-theme-manage-skeleton");
+    expect(skeletonSource).toContain("export { ThemeManageSkeleton }");
     expect(themeManageSource).toContain('from "@/pages/ThemeManageSkeleton"');
     expect(themeManageSource).toMatch(
       /if \(configLoading\) \{\s*return <ThemeManageSkeleton \/>;/,
     );
+  });
+
+  it("uses instance page and chart skeletons instead of Spinner waits", () => {
+    const instanceSource = readFileSync(
+      new URL("../../pages/Instance.tsx", import.meta.url),
+      "utf8",
+    );
+    const instancePanelSource = readFileSync(
+      new URL("../../components/instance/InstancePanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const instanceSkeletonSource = readFileSync(
+      new URL("../../components/instance/InstancePageSkeleton.tsx", import.meta.url),
+      "utf8",
+    );
+    const chartSkeletonSource = readFileSync(
+      new URL("../../components/instance/ChartSkeletonBody.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(instanceSource).toContain("InstancePageSkeleton");
+    expect(instanceSource).not.toContain("<Spinner");
+    expect(instanceSource).not.toContain('from "@/components/ui/Spinner"');
+    expect(instancePanelSource).toContain("InstanceChartLoading");
+    expect(instancePanelSource).toContain("ChartSkeletonBody");
+    expect(instancePanelSource).not.toContain("<Spinner");
+    expect(instancePanelSource).not.toContain('from "@/components/ui/Spinner"');
+    expect(instanceSkeletonSource).toContain("data-instance-page-skeleton");
+    expect(instanceSkeletonSource).not.toContain("<Spinner");
+    expect(chartSkeletonSource).toContain("data-instance-chart-skeleton");
+    expect(routerSource).toContain("suspended(<Instance />, <InstancePageSkeleton />)");
   });
 });
